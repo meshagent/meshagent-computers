@@ -31,7 +31,6 @@ setuptools.setup(
         "meshagent-api>=0.0.4",
         "meshagent-agents>=0.0.4",
         "meshagent-tools>=0.0.4",
-        "meshagent-computers>=0.0.4",
         "playwright~=1.50.0",
         "browserbase~=1.2.0",
         "scrapybara~=2.4.1",
