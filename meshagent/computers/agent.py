@@ -87,10 +87,10 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                     await self.computer.__aenter__()
                     started = True
             
-                await context.room.agents.invoke_tool(toolkit="meshagent.ui", tool="show_toast", arguments={
-                    "title" : "executing browser call",
-                    "description" : json.dumps(arguments)
-                }, participant_id=participant.id)
+                #await context.room.agents.invoke_tool(toolkit="meshagent.ui", tool="show_toast", arguments={
+                #    "title" : "executing browser call",
+                #    "description" : json.dumps(arguments)
+                #}, participant_id=participant.id)
 
                 outputs = await operator.play(computer=self.computer, item=arguments)
                 for output in outputs:
@@ -102,7 +102,6 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                                 image_data_b64 = b64.split(",", 1)
                                 
                                 image_bytes = base64.b64decode(image_data_b64[1])
-
                            
                                 await context.room.messaging.send_message(
                                     to=participant,
