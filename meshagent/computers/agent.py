@@ -3,7 +3,7 @@ from meshagent.agents import LLMAdapter, AgentChatContext
 from meshagent.tools import Tool, Toolkit, ToolContext
 from meshagent.agents.prompt import PromptAgent
 from meshagent.computers import Computer, Operator
-from meshagent.agents.chat import ChatBot
+from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RemoteParticipant, FileResponse
 from meshagent.api.messaging import RawOutputs
 
@@ -44,9 +44,8 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
         self.operator_cls = operator_cls
 
 
-    async def finalize_toolkits(self, *, toolkits: list[Toolkit], participant: RemoteParticipant, chat_context: AgentChatContext):
+    async def init_thread_context(self, *, thread_context: ChatThreadContext):
         
-
         operator : Operator = self.operator_cls()
         computer : Computer = self.computer_cls()
         started = False
@@ -86,11 +85,15 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                 if started == False:
                     await self.computer.__aenter__()
                     started = True
-            
-                #await context.room.agents.invoke_tool(toolkit="meshagent.ui", tool="show_toast", arguments={
-                #    "title" : "executing browser call",
-                #    "description" : json.dumps(arguments)
-                #}, participant_id=participant.id)
+
+                for participant in thread_context.participants:
+                    await context.room.messaging.send_message(
+                        to=participant,
+                        type="computer_use",
+                        message={
+                            "arguments" : arguments
+                        }
+                    )
 
                 outputs = await operator.play(computer=self.computer, item=arguments)
                 for output in outputs:
@@ -102,14 +105,15 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                                 image_data_b64 = b64.split(",", 1)
                                 
                                 image_bytes = base64.b64decode(image_data_b64[1])
-                           
-                                await context.room.messaging.send_message(
-                                    to=participant,
-                                    type="computer_screen",
-                                    message={
-                                    },
-                                    attachment=image_bytes
-                                )
+
+                                for participant in thread_context.participants:
+                                    await context.room.messaging.send_message(
+                                        to=participant,
+                                        type="computer_screen",
+                                        message={
+                                        },
+                                        attachment=image_bytes
+                                    )
 
                 return RawOutputs(outputs=outputs)
             
@@ -191,18 +195,19 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
             GotoURL(computer=computer),
         ])
 
+    
         outputs = await computer_tool.execute(context=ToolContext(
             room=self.room,
-            caller=participant    
+            caller=self.room.local_participant    
         ), arguments={
             "type" : "screenshot"
         })
 
-        chat_context.messages.extend(outputs.outputs)
+        thread_context.chat.messages.extend(outputs.outputs)
 
-        return [
+        thread_context.toolkits =[
             computer_toolkit,
-            *toolkits
+            *thread_context.toolkits
         ]
 
 
