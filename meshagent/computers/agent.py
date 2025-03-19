@@ -200,6 +200,16 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                     url = "https://"+url
 
                 await self.computer.goto(url)
+
+                # send an updated screen out
+                for participant in thread_context.participants:
+                    await context.room.messaging.send_message(
+                        to=participant,
+                        type="computer_screen",
+                        message={
+                        },
+                        attachment = await self.computer.screenshot_bytes(full_page=False)
+                    )
         
         computer_tool = ComputerTool(computer=computer, operator=operator)
         
