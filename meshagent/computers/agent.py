@@ -10,6 +10,11 @@ from meshagent.api.messaging import RawOutputs
 from typing import Optional
 import base64
 import json
+import logging
+
+logging.basicConfig()
+logger = logging.getLogger("computer")
+logger.setLevel(logging.INFO)
 
 class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
     def __init__(self, *, name, 
@@ -26,9 +31,8 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
 
         if rules == None:
             rules=[
-                "if asked to go to a URL, you MUST use the goto_url function to go to the url",
-                "do not search for URLs, go to them",
-                "first take action in the computer, before calling any functions"
+                "if asked to go to a URL, you MUST use the goto function to go to the url if it is available",
+                "after going directly to a URL, the screen will change so you should take a look at it to know what to do next"
             ]
         super().__init__(
             name=name,
@@ -81,6 +85,7 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                 }
 
             async def execute(self,  context: ToolContext, *, arguments):
+                
                 nonlocal started
                 if started == False:
                     await self.computer.__aenter__()
@@ -114,7 +119,15 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                                         },
                                         attachment=image_bytes
                                     )
-
+                
+                nonlocal computer_toolkit
+                if len(computer_toolkit.tools) == 1:
+                    # HACK: after looking at the page, add the other tools,
+                    # if we add these first then the computer-use-preview mode fails if it calls them before using the computer
+                    computer_toolkit.tools.extend([
+                        ScreenshotTool(computer=computer),
+                        GotoURL(computer=computer),
+                    ])
                 return RawOutputs(outputs=outputs)
             
         class ScreenshotTool(Tool):
@@ -160,8 +173,8 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                 self.computer = computer
 
                 super().__init__(
-                    name="goto_url",
-                    description="goes to a url in the browser",
+                    name="goto",
+                    description="goes to a specific URL. Make sure it starts with http:// or https://",
                     # TODO: give a correct schema
                     input_schema={
                         "additionalProperties" : False,
@@ -169,7 +182,8 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                         "required" : ["url"],
                         "properties" : {
                             "url" : {
-                                "type" : "string"
+                                "type" : "string",
+                                "description": "Fully qualified URL to navigate to.",
                             }
                         }
                     },
@@ -182,7 +196,7 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                     await self.computer.__aenter__()
                     started = True
 
-                if url.startswith("https://") == False:
+                if url.startswith("https://") == False and url.startswith("http://") == False:
                     url = "https://"+url
 
                 await self.computer.goto(url)
@@ -190,22 +204,10 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
         computer_tool = ComputerTool(computer=computer, operator=operator)
         
         computer_toolkit = Toolkit(name="meshagent.openai.computer", tools=[
-            computer_tool,
-            ScreenshotTool(computer=computer),
-            GotoURL(computer=computer),
+            computer_tool
         ])
 
-    
-        outputs = await computer_tool.execute(context=ToolContext(
-            room=self.room,
-            caller=self.room.local_participant    
-        ), arguments={
-            "type" : "screenshot"
-        })
-
-        thread_context.chat.messages.extend(outputs.outputs)
-
-        thread_context.toolkits =[
+        thread_context.toolkits = [
             computer_toolkit,
             *thread_context.toolkits
         ]

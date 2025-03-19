@@ -80,20 +80,29 @@ class BasePlaywrightComputer:
             await self._context.__aexit__(exc_type, exc_val, exc_tb)
 
     def get_current_url(self) -> str:
-        return self._page.url
+        if self._page == None:
+            return "about:blank"
+        
+    async def ensure_page(self):
+        # After a timeout, we might loose our browser
+        if self._page == None or self._browser.is_connected == False:
+            self._browser, self._page = await self._get_browser_and_page()
 
     # --- Common "Computer" actions ---
 
-
+    
     async def screenshot_bytes(self, full_page: bool = False) -> bytes:
+        await self.ensure_page()
         png_bytes = await self._page.screenshot(full_page=full_page)
         return png_bytes
 
     async def screenshot(self, full_page: bool = False) -> str:
+        await self.ensure_page()
         png_bytes = await self.screenshot_bytes(full_page=full_page)
         return base64.b64encode(png_bytes).decode("utf-8")
 
     async def click(self, x: int, y: int, button: str = "left") -> None:
+        await self.ensure_page()
         match button:
             case "back":
                 await self.back()
@@ -107,27 +116,34 @@ class BasePlaywrightComputer:
                 await self._page.mouse.click(x, y, button=button_type)
 
     async def double_click(self, x: int, y: int) -> None:
+        await self.ensure_page()
         await self._page.mouse.dblclick(x, y)
 
     async def scroll(self, x: int, y: int, scroll_x: int, scroll_y: int) -> None:
+        await self.ensure_page()
         await self._page.mouse.move(x, y)
         await self._page.evaluate(f"window.scrollBy({scroll_x}, {scroll_y})")
 
     async def type(self, text: str) -> None:
+        await self.ensure_page()
         await self._page.keyboard.type(text)
 
     async def wait(self, ms: int = 1000) -> None:
+        await self.ensure_page()
         time.sleep(ms / 1000)
 
     async def move(self, x: int, y: int) -> None:
+        await self.ensure_page()
         await self._page.mouse.move(x, y)
 
     async def keypress(self, keys: List[str]) -> None:
+        await self.ensure_page()
         for key in keys:
             mapped_key = CUA_KEY_TO_PLAYWRIGHT_KEY.get(key.lower(), key)
             await self._page.keyboard.press(mapped_key)
 
     async def drag(self, path: List[Dict[str, int]]) -> None:
+        await self.ensure_page()
         if not path:
             return
         
@@ -138,19 +154,23 @@ class BasePlaywrightComputer:
         await self._page.mouse.up()
 
     async def get_current_url(self) -> str:
+        await self.ensure_page()
         return self._page.url
 
     # --- Extra browser-oriented actions ---
     async def goto(self, url: str) -> None:
+        await self.ensure_page()
         try:
             return await self._page.goto(url)
         except Exception as e:
             print(f"Error navigating to {url}: {e}")
 
     async def back(self) -> None:
+        await self.ensure_page()
         return await self._page.go_back()
 
     async def forward(self) -> None:
+        await self.ensure_page()
         return await self._page.go_forward()
 
     # --- Subclass hook ---

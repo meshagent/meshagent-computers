@@ -173,6 +173,8 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
             )
 
     async def screenshot(self) -> str:
+        await self.ensure_page()
+
         """
         Capture a screenshot of the current viewport using CDP.
 
