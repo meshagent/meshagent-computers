@@ -112,7 +112,7 @@ class ComputerAgent[ComputerType:Computer, OperatorType:Operator](ChatBot):
                                 image_bytes = base64.b64decode(image_data_b64[1])
 
                                 for participant in thread_context.participants:
-                                    await context.room.messaging.send_message(
+                                    context.room.messaging.send_message_nowait(
                                         to=participant,
                                         type="computer_screen",
                                         message={
