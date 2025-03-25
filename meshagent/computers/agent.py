@@ -4,7 +4,7 @@ from meshagent.computers import Computer, Operator, BrowserbaseBrowser
 from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RequiredToolkit, RemoteParticipant
 from meshagent.api.messaging import RawOutputs
-from meshagent.tools.toolkit import factories
+from meshagent.tools.toolkit import register_toolkit_factory
 
 from typing import Optional, Type, Callable
 import base64
@@ -164,7 +164,8 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
 async def make_browserbase_toolkit(context: ToolContext, requirement: RequiredToolkit):
     return make_computer_toolkit(operator_cls=Operator(), computer_cls=BrowserbaseBrowser())
 
-factories["browserbase"] = make_browserbase_toolkit
+register_toolkit_factory("browserbase", make_browserbase_toolkit)
+
 
 class ComputerAgent(ChatBot):
     def __init__(self, *, name, 
