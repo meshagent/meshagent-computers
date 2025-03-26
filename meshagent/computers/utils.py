@@ -47,7 +47,7 @@ def sanitize_message(msg: dict) -> dict:
     return msg
 
 
-def create_response(**kwargs):
+def track_response(**kwargs):
     url = "https://api.openai.com/v1/responses"
     headers = {
         "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
