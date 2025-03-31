@@ -201,7 +201,7 @@ class ComputerAgent(ChatBot):
 
     async def get_thread_toolkits(self, *, thread_context: ChatThreadContext, participant: RemoteParticipant):
         
-        toolkits = super().get_thread_toolkits(thread_context=thread_context, participant=participant)
+        toolkits = await super().get_thread_toolkits(thread_context=thread_context, participant=participant)
 
         def render_screen(image_bytes: bytes):
             for participant in thread_context.participants:
