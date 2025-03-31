@@ -161,6 +161,8 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
         computer_tool
     ])
 
+    return computer_toolkit
+
 async def make_browserbase_toolkit(context: ToolContext, requirement: RequiredToolkit):
     return make_computer_toolkit(operator_cls=Operator(), computer_cls=BrowserbaseBrowser())
 
@@ -220,7 +222,7 @@ class ComputerAgent(ChatBot):
         )
         return [
             computer_toolkit,
-            toolkits
+            *toolkits
         ]
 
 
