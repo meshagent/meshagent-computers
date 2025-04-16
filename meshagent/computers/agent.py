@@ -10,9 +10,8 @@ from typing import Optional, Type, Callable
 import base64
 import logging
 
-logging.basicConfig()
 logger = logging.getLogger("computer")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARN)
 
 def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Computer], render_screen: Callable[[bytes],None]):
 
