@@ -5,6 +5,7 @@ from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RequiredToolkit, RemoteParticipant
 from meshagent.api.messaging import RawOutputs
 from meshagent.tools.toolkit import register_toolkit_factory
+from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 
 from typing import Optional, Type, Callable
 import base64
@@ -19,35 +20,25 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
     computer = computer_cls()
     started = False
 
-    class ComputerTool(Tool):
-        def __init__(self, *, operator: Operator, computer: Computer, title = "computer_call", description = "handle computer calls from computer use preview", rules = [], thumbnail_url = None, defs = None):
+    class ComputerTool(OpenAIResponsesTool):
+        def __init__(self, *, operator: Operator, computer: Computer, title = "computer_call", description = "handle computer calls from computer use preview", rules = [], thumbnail_url = None):
             super().__init__(
                 name="computer_call",
                 # TODO: give a correct schema
-                input_schema={
-                    "additionalProperties" : False,
-                    "type" : "object",
-                    "required" : [],
-                    "properties" : {}
-                },
                 title=title,
                 description=description,
                 rules=rules,
-                thumbnail_url=thumbnail_url,
-                defs=defs,
-                
+                thumbnail_url=thumbnail_url,                
             )
             self.computer = computer
 
-
-        @property
-        def options(self):
+        def get_open_ai_tool_definition(self):
             return {
-                "type": "computer-preview",
+                "type": "computer_use_preview",
                 "display_width": self.computer.dimensions[0],
                 "display_height": self.computer.dimensions[1],
                 "environment": self.computer.environment,
-            }
+            }               
 
         async def execute(self, context: ToolContext, *, arguments):
             
