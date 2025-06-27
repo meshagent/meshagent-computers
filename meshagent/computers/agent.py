@@ -14,11 +14,30 @@ import logging
 logger = logging.getLogger("computer")
 logger.setLevel(logging.WARN)
 
+class ComputerToolkit(Toolkit):
+    def __init__(self, name: str, computer:Computer, operator: Operator, tools: list[Tool]):
+        super().__init__(name=name, tools=tools)
+        self.computer = computer
+        self.operator = operator
+        self.started = False
+        self._starting = None
+
+    async def ensure_started(self):
+
+        self.started = False
+
+        if self.started == False:
+            
+            self.started = True
+            await self.computer.__aenter__()
+            
+
+
 def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Computer], render_screen: Callable[[bytes],None]):
 
     operator = operator_cls()
     computer = computer_cls()
-    started = False
+    
 
     class ComputerTool(OpenAIResponsesTool):
         def __init__(self, *, operator: Operator, computer: Computer, title = "computer_call", description = "handle computer calls from computer use preview", rules = [], thumbnail_url = None):
@@ -32,22 +51,23 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
             )
             self.computer = computer
 
-        def get_open_ai_tool_definition(self):
+        def get_open_ai_tool_definitions(self) -> list[dict]:
+            return [ 
+                {
+                    "type": "computer_use_preview",
+                    "display_width": self.computer.dimensions[0],
+                    "display_height": self.computer.dimensions[1],
+                    "environment": self.computer.environment,
+                } 
+        ]
+                       
+        def get_open_ai_output_handlers(self):
             return {
-                "type": "computer_use_preview",
-                "display_width": self.computer.dimensions[0],
-                "display_height": self.computer.dimensions[1],
-                "environment": self.computer.environment,
-            }               
+                "computer_call" : self.handle_computer_call
+            }
 
-        async def execute(self, context: ToolContext, *, arguments):
+        async def handle_computer_call(self, context: ToolContext, **arguments):
             
-            nonlocal started
-            if started == False:
-                await self.computer.__aenter__()
-                started = True
-
-
             outputs = await operator.play(computer=self.computer, item=arguments)
             for output in outputs:
                 if output["type"] == "computer_call_output":
@@ -69,7 +89,7 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
                     ScreenshotTool(computer=computer),
                     GotoURL(computer=computer),
                 ])
-            return RawOutputs(outputs=outputs)
+            return outputs[0]
         
     class ScreenshotTool(Tool):
         def __init__(self, computer: Computer):
@@ -97,11 +117,6 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
 
         
         async def execute(self, context: ToolContext, save_path: str, full_page: bool):
-            nonlocal started
-            if started == False:
-                await self.computer.__aenter__()
-                started = True
-
             screenshot_bytes = await self.computer.screenshot_bytes(full_page=full_page)
             handle = await context.room.storage.open(path=save_path, overwrite=True)
             await context.room.storage.write(handle=handle, data=screenshot_bytes)
@@ -132,10 +147,7 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
 
         
         async def execute(self, context: ToolContext, url: str):
-            nonlocal started
-            if started == False:
-                await self.computer.__aenter__()
-                started = True
+           
 
             if url.startswith("https://") == False and url.startswith("http://") == False:
                 url = "https://"+url
@@ -147,7 +159,7 @@ def make_computer_toolkit(*, operator_cls: Type[Operator], computer_cls: Type[Co
 
     computer_tool = ComputerTool(computer=computer, operator=operator)
 
-    computer_toolkit = Toolkit(name="meshagent.openai.computer", tools=[
+    computer_toolkit = ComputerToolkit(name="meshagent.openai.computer", computer=computer, operator=operator, tools=[
         computer_tool
     ])
 
@@ -191,6 +203,8 @@ class ComputerAgent(ChatBot):
         self.operator_cls = operator_cls
 
 
+
+
     async def get_thread_toolkits(self, *, thread_context: ChatThreadContext, participant: RemoteParticipant):
         
         toolkits = await super().get_thread_toolkits(thread_context=thread_context, participant=participant)
@@ -210,6 +224,12 @@ class ComputerAgent(ChatBot):
             computer_cls=self.computer_cls,
             render_screen=render_screen
         )
+
+        await computer_toolkit.ensure_started()
+
+        await computer_toolkit.computer.goto("https://www.flutterconusa.dev/agenda")
+       
+    
         return [
             computer_toolkit,
             *toolkits
