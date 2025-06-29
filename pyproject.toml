@@ -12,15 +12,15 @@ description = "Computer Building Blocks for Meshagent"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
-  "pytest~=8.3.5",
-  "pytest-asyncio~=0.26.0",
-  "openai~=1.86.0",
+  "pytest~=8.3",
+  "pytest-asyncio~=0.26",
+  "openai~=1.86",
   "meshagent-api~=0.0.35",
   "meshagent-agents~=0.0.35",
   "meshagent-tools~=0.0.35",
-  "playwright~=1.51.0",
-  "browserbase~=1.2.0",
-  "scrapybara~=2.4.7"
+  "playwright~=1.51",
+  "browserbase~=1.2",
+  "scrapybara~=2.4"
 ]
 
 [project.urls]
