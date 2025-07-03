@@ -177,8 +177,8 @@ class ComputerAgent(ChatBot):
             description=None,
             requires=None,
             labels = None,
-            computer_cls: Type[Computer],
-            operator_cls: Type[Operator],
+            computer_cls: Type[Computer] = BrowserbaseBrowser,
+            operator_cls: Type[Operator] = Operator,
             rules: Optional[list[str]] = None,
             llm_adapter: Optional[LLMAdapter] = None,
             toolkits: list[Toolkit] = None
@@ -202,9 +202,6 @@ class ComputerAgent(ChatBot):
         self.computer_cls = computer_cls
         self.operator_cls = operator_cls
 
-
-
-
     async def get_thread_toolkits(self, *, thread_context: ChatThreadContext, participant: RemoteParticipant):
         
         toolkits = await super().get_thread_toolkits(thread_context=thread_context, participant=participant)
@@ -227,9 +224,6 @@ class ComputerAgent(ChatBot):
 
         await computer_toolkit.ensure_started()
 
-        await computer_toolkit.computer.goto("https://www.flutterconusa.dev/agenda")
-       
-    
         return [
             computer_toolkit,
             *toolkits
