@@ -2,12 +2,13 @@ from .computer import Computer
 from .utils import check_blocklisted_url
 import json
 
+
 class Operator:
     def __init__(self):
         self.print_steps = False
         self.show_images = False
 
-    async def acknowledge_safety_check_callback(self, data: dict): 
+    async def acknowledge_safety_check_callback(self, data: dict):
         return True
 
     async def show_image(self, base_64: str):
