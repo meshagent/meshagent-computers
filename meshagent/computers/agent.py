@@ -79,7 +79,7 @@ def make_computer_toolkit(
             outputs = await operator.play(computer=self.computer, item=arguments)
             for output in outputs:
                 if output["type"] == "computer_call_output":
-                    if output["output"] != None:
+                    if output["output"] is not None:
                         if output["output"]["type"] == "input_image":
                             b64: str = output["output"]["image_url"]
                             image_data_b64 = b64.split(",", 1)
@@ -197,7 +197,7 @@ class ComputerAgent(ChatBot):
         llm_adapter: Optional[LLMAdapter] = None,
         toolkits: list[Toolkit] = None,
     ):
-        if rules == None:
+        if rules is None:
             rules = [
                 "if asked to go to a URL, you MUST use the goto function to go to the url if it is available",
                 "after going directly to a URL, the screen will change so you should take a look at it to know what to do next",

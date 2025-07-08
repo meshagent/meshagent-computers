@@ -79,12 +79,12 @@ class BasePlaywrightComputer:
             await self._context.__aexit__(exc_type, exc_val, exc_tb)
 
     def get_current_url(self) -> str:
-        if self._page == None:
+        if self._page is None:
             return "about:blank"
 
     async def ensure_page(self):
         # After a timeout, we might loose our browser
-        if self._page == None or self._browser.is_connected == False:
+        if self._page is None or self._browser.is_connected == False:
             self._browser, self._page = await self._get_browser_and_page()
 
     # --- Common "Computer" actions ---
