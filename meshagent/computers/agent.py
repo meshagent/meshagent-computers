@@ -151,10 +151,7 @@ def make_computer_toolkit(
             )
 
         async def execute(self, context: ToolContext, url: str):
-            if (
-                not url.startswith("https://")
-                and not url.startswith("http://")
-            ):
+            if not url.startswith("https://") and not url.startswith("http://"):
                 url = "https://" + url
 
             await self.computer.goto(url)

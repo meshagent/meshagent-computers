@@ -13,8 +13,9 @@ __all__ = [
     BrowserbaseBrowser,
     LocalPlaywrightComputer,
     DockerComputer,
-    ScrapybaraBrowser, ScrapybaraUbuntu,
-Operator,
-ComputerAgent,
-    __version__
+    ScrapybaraBrowser,
+    ScrapybaraUbuntu,
+    Operator,
+    ComputerAgent,
+    __version__,
 ]
