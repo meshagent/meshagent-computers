@@ -27,7 +27,7 @@ class ComputerToolkit(Toolkit):
     async def ensure_started(self):
         self.started = False
 
-        if self.started == False:
+        if not self.started:
             self.started = True
             await self.computer.__aenter__()
 
@@ -151,10 +151,7 @@ def make_computer_toolkit(
             )
 
         async def execute(self, context: ToolContext, url: str):
-            if (
-                url.startswith("https://") == False
-                and url.startswith("http://") == False
-            ):
+            if not url.startswith("https://") and not url.startswith("http://"):
                 url = "https://" + url
 
             await self.computer.goto(url)
