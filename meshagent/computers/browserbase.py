@@ -1,10 +1,9 @@
 import os
-from typing import Tuple, Dict, List, Union, Optional
-from playwright.async_api import Browser, Page, BrowserContext, Error as PlaywrightError
+from typing import Tuple
+from playwright.async_api import Browser, Page, Error as PlaywrightError
 from .base_playwright import BasePlaywrightComputer
 from browserbase import AsyncBrowserbase
 from dotenv import load_dotenv
-import base64
 
 load_dotenv()
 

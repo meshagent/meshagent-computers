@@ -3,7 +3,6 @@ from meshagent.tools import Tool, Toolkit, ToolContext
 from meshagent.computers import Computer, Operator, BrowserbaseBrowser
 from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RequiredToolkit, RemoteParticipant
-from meshagent.api.messaging import RawOutputs
 from meshagent.tools.toolkit import register_toolkit_factory
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 
