@@ -1,5 +1,5 @@
 from typing import Protocol, List, Literal, Dict
- 
+
 
 class Computer(Protocol):
     """Defines the 'shape' (methods/properties) our loop expects."""
@@ -28,9 +28,9 @@ class Computer(Protocol):
     async def drag(self, path: List[Dict[str, int]]) -> None: ...
 
     async def get_current_url() -> str: ...
-    
-    async def __aenter__(self) -> 'Computer':
+
+    async def __aenter__(self) -> "Computer":
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> 'Computer':
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> "Computer":
         return self

@@ -61,7 +61,6 @@ class BasePlaywrightComputer:
 
         # Set up network interception to flag URLs matching domains in BLOCKED_DOMAINS
         async def handle_route(route: Route, request: Request):
-
             url = request.url
             if check_blocklisted_url(url):
                 print(f"Flagging blocked domain: {url}")
@@ -82,7 +81,7 @@ class BasePlaywrightComputer:
     def get_current_url(self) -> str:
         if self._page == None:
             return "about:blank"
-        
+
     async def ensure_page(self):
         # After a timeout, we might loose our browser
         if self._page == None or self._browser.is_connected == False:
@@ -90,7 +89,6 @@ class BasePlaywrightComputer:
 
     # --- Common "Computer" actions ---
 
-    
     async def screenshot_bytes(self, full_page: bool = False) -> bytes:
         await self.ensure_page()
         png_bytes = await self._page.screenshot(full_page=full_page)
@@ -146,7 +144,7 @@ class BasePlaywrightComputer:
         await self.ensure_page()
         if not path:
             return
-        
+
         await self._page.mouse.move(path[0]["x"], path[0]["y"])
         await self._page.mouse.down()
         for point in path[1:]:

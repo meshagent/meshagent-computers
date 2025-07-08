@@ -5,15 +5,15 @@ import asyncio
 
 async def _async_check_output(*args, **kwargs):
     proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **kwargs
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **kwargs
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, args, output=stdout, stderr=stderr)
+        raise subprocess.CalledProcessError(
+            proc.returncode, args, output=stdout, stderr=stderr
+        )
     return stdout
+
 
 class DockerComputer:
     environment = "linux"
@@ -107,8 +107,7 @@ class DockerComputer:
         #     "base64 /tmp/screenshot.png"
         # )
         cmd = (
-            f"export DISPLAY={self.display} && "
-            "import -window root png:- | base64 -w 0"
+            f"export DISPLAY={self.display} && import -window root png:- | base64 -w 0"
         )
 
         return await self._exec(cmd)
@@ -174,5 +173,7 @@ class DockerComputer:
             f"DISPLAY={self.display} xdotool mousemove {start_x} {start_y} mousedown 1"
         )
         for point in path[1:]:
-            await self._exec(f"DISPLAY={self.display} xdotool mousemove {point['x']} {point['y']}")
+            await self._exec(
+                f"DISPLAY={self.display} xdotool mousemove {point['x']} {point['y']}"
+            )
         await self._exec(f"DISPLAY={self.display} xdotool mouseup 1")
