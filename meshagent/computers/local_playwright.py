@@ -11,12 +11,13 @@ class LocalPlaywrightComputer(BasePlaywrightComputer):
 
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
         width, height = self.dimensions
-        launch_args = [f"--window-size={width},{height}", "--disable-extensions", "--disable-file-system"]
+        launch_args = [
+            f"--window-size={width},{height}",
+            "--disable-extensions",
+            "--disable-file-system",
+        ]
         browser = await self._playwright.chromium.launch(
-            chromium_sandbox=True,
-            headless=self.headless,
-            args=launch_args,
-            env={}
+            chromium_sandbox=True, headless=self.headless, args=launch_args, env={}
         )
         page = await browser.new_page()
         await page.set_viewport_size({"width": width, "height": height})

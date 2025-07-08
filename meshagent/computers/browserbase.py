@@ -1,10 +1,9 @@
 import os
-from typing import Tuple, Dict, List, Union, Optional
-from playwright.async_api import Browser, Page, BrowserContext, Error as PlaywrightError
+from typing import Tuple
+from playwright.async_api import Browser, Page, Error as PlaywrightError
 from .base_playwright import BasePlaywrightComputer
 from browserbase import AsyncBrowserbase
 from dotenv import load_dotenv
-import base64
 
 load_dotenv()
 
@@ -75,8 +74,7 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
 
         # Connect to the remote session
         browser = await self._playwright.chromium.connect_over_cdp(
-            self.session.connect_url,
-            timeout=60000
+            self.session.connect_url, timeout=60000
         )
         context = browser.contexts[0]
 
@@ -186,12 +184,13 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
             cdp_session = await self._page.context.new_cdp_session(self._page)
 
             # Capture screenshot using CDP
-            result = await cdp_session.send("Page.captureScreenshot", {
-                "format": "png",
-                "fromSurface": True
-            })
+            result = await cdp_session.send(
+                "Page.captureScreenshot", {"format": "png", "fromSurface": True}
+            )
 
-            return result['data']
+            return result["data"]
         except PlaywrightError as error:
-            print(f"CDP screenshot failed, falling back to standard screenshot: {error}")
+            print(
+                f"CDP screenshot failed, falling back to standard screenshot: {error}"
+            )
             return await super().screenshot()
