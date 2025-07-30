@@ -20,7 +20,9 @@ dependencies = [
   "meshagent-tools~=0.5.3",
   "playwright~=1.51",
   "browserbase~=1.2",
-  "scrapybara~=2.4"
+  "scrapybara~=2.4",
+  "pillow~=11.3.0",
+  "python-dotenv~=1.1.1"
 ]
 
 [project.urls]
