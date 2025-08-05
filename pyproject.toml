@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "meshagent-computers"
 dynamic = ["version", "readme"]
 description = "Computer Building Blocks for Meshagent"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
   "pytest~=8.4",
