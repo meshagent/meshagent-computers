@@ -2,8 +2,7 @@ from meshagent.agents import LLMAdapter
 from meshagent.tools import Tool, Toolkit, ToolContext
 from meshagent.computers import Computer, Operator, BrowserbaseBrowser
 from meshagent.agents.chat import ChatBot, ChatThreadContext
-from meshagent.api import RequiredToolkit, RemoteParticipant
-from meshagent.tools.toolkit import register_toolkit_factory
+from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 
 from typing import Optional, Type, Callable
@@ -168,15 +167,6 @@ def make_computer_toolkit(
     )
 
     return computer_toolkit
-
-
-async def make_browserbase_toolkit(context: ToolContext, requirement: RequiredToolkit):
-    return make_computer_toolkit(
-        operator_cls=Operator(), computer_cls=BrowserbaseBrowser()
-    )
-
-
-register_toolkit_factory("browserbase", make_browserbase_toolkit)
 
 
 class ComputerAgent(ChatBot):
