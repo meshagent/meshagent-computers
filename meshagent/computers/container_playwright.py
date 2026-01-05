@@ -5,6 +5,8 @@ import asyncio
 import os
 import logging
 
+from meshagent.api.port_forward import port_forward
+
 
 logger = logging.getLogger("computer_use")
 
@@ -24,6 +26,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         self.image = image
         self.room = room
         self.container_fut = None
+        self._forwarder = None
 
     async def _find_or_create_container(self):
         containers = await self.room.containers.list()
@@ -49,18 +52,22 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         return await self.container_fut
 
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
-        await self.ensure_container()
+        container_id = await self.ensure_container()
 
         width, height = self.dimensions
         headers = {}
         if os.getenv("MESHAGENT_SESSION_ID") is None or os.getenv(
             "MESHAGENT_TUNNEL_PLAYWRIGHT"
         ):
-            base_url = (
-                os.getenv("MESHAGENT_API_URL").replace("http", "ws", 1)
-                + "/tunnel/3000/"
+            logger.info("exposing local port forward for remote playwright container")
+            self._forwarder = await port_forward(
+                container_id=container_id,
+                port=3000,
+                token=self.room.protocol.token,
             )
-            headers = {"Authorization": f"Bearer {self.room.protocol.token}"}
+
+            base_url = f"ws://{self._forwarder.host}:{self._forwarder.port}/"
+
         else:
             base_url = "ws://127.0.0.1:3000/"
 
