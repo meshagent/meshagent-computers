@@ -1,4 +1,13 @@
+import asyncio
+import base64
+import inspect
+import logging
+import uuid
+from typing import Awaitable, Callable, Optional
+
 from meshagent.agents import LLMAdapter
+from meshagent.agents.images_database import ImagesDatabase
+from meshagent.agents.thread_adapter import ThreadAdapter
 from meshagent.tools import Tool, Toolkit, ToolContext
 from meshagent.computers import (
     Computer,
@@ -10,9 +19,6 @@ from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 from meshagent.api import RoomClient
-from typing import Optional, Callable
-import base64
-import logging
 
 logger = logging.getLogger("computer")
 logger.setLevel(logging.WARN)
@@ -28,7 +34,7 @@ class ComputerTool(OpenAIResponsesTool):
         description="handle computer calls from computer use preview",
         rules=[],
         thumbnail_url=None,
-        render_screen: Optional[Callable] = None,
+        render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
         toolkit: "ComputerToolkit",
     ):
         super().__init__(
@@ -72,7 +78,9 @@ class ComputerTool(OpenAIResponsesTool):
                             image_data_b64 = b64.split(",", 1)
 
                             image_bytes = base64.b64decode(image_data_b64[1])
-                            self.render_screen(image_bytes)
+                            render_result = self.render_screen(image_bytes)
+                            if inspect.isawaitable(render_result):
+                                await render_result
 
         return outputs[0]
 
@@ -113,7 +121,7 @@ class GotoURL(Tool):
         self,
         computer: Computer,
         toolkit: "ComputerToolkit",
-        render_screen: Optional[Callable] = None,
+        render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
     ):
         self.computer = computer
         self.render_screen = render_screen
@@ -146,7 +154,11 @@ class GotoURL(Tool):
         await self.computer.goto(url)
 
         if self.render_screen is not None:
-            self.render_screen(await self.computer.screenshot_bytes(full_page=False))
+            render_result = self.render_screen(
+                await self.computer.screenshot_bytes(full_page=False)
+            )
+            if inspect.isawaitable(render_result):
+                await render_result
 
 
 class ComputerToolkit(Toolkit):
@@ -157,7 +169,10 @@ class ComputerToolkit(Toolkit):
         computer: Optional[Computer] = None,
         operator: Optional[Operator] = None,
         room: Optional[RoomClient] = None,
-        render_screen: Optional[Callable] = None,
+        render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
+        thread_path: Optional[str] = None,
+        thread_adapter: Optional[ThreadAdapter] = None,
+        images_db: Optional[ImagesDatabase] = None,
     ):
         if operator is None:
             operator = Operator()
@@ -175,9 +190,15 @@ class ComputerToolkit(Toolkit):
         self.computer = computer
         self.operator = operator
         self.started = False
-        self._starting = None
+        self._starting = asyncio.Lock()
+        self.room = room
+        self.thread_path = thread_path
+        self.thread_adapter = thread_adapter
+        self._images_db = images_db
 
-        self.render_screen = render_screen
+        self.render_screen = (
+            render_screen if render_screen is not None else self.save_screen_image
+        )
 
         super().__init__(
             name=name,
@@ -185,20 +206,78 @@ class ComputerToolkit(Toolkit):
                 ComputerTool(
                     computer=computer,
                     operator=operator,
-                    render_screen=render_screen,
+                    render_screen=self.render_screen,
                     toolkit=self,
                 ),
                 # ScreenshotTool(computer=computer),
-                GotoURL(computer=computer, toolkit=self, render_screen=render_screen),
+                GotoURL(
+                    computer=computer,
+                    toolkit=self,
+                    render_screen=self.render_screen,
+                ),
             ],
         )
 
-    async def __aenter__(self):
-        self.started = False
+    async def save_screen_image(self, image_bytes: bytes) -> None:
+        if self.room is None:
+            return
+        if not isinstance(self.thread_path, str) or self.thread_path.strip() == "":
+            return
+        if self.thread_adapter is None:
+            logger.warning(
+                "thread adapter was not available for screenshot persistence",
+                extra={"path": self.thread_path},
+            )
+            return
 
-        if not self.started:
-            self.started = True
+        created_by = self.room.local_participant.get_attribute("name")
+        if not isinstance(created_by, str):
+            created_by = ""
+
+        if self._images_db is None:
+            self._images_db = ImagesDatabase(room=self.room)
+
+        try:
+            saved_image = await self._images_db.save(
+                data=image_bytes,
+                mime_type="image/png",
+                created_by=created_by,
+                annotations={
+                    "source": "computer_toolkit",
+                    "thread_path": self.thread_path,
+                },
+            )
+        except Exception as ex:
+            logger.error("failed to persist computer screenshot", exc_info=ex)
+            return
+
+        try:
+            self.thread_adapter.write_image(
+                message_id=str(uuid.uuid4()),
+                image_id=saved_image.id,
+                mime_type=saved_image.mime_type,
+                created_at=saved_image.created_at,
+                created_by=saved_image.created_by,
+                status="completed",
+                status_detail="Screenshot saved",
+            )
+        except Exception as ex:
+            logger.error("failed to attach computer screenshot to thread", exc_info=ex)
+
+    async def __aenter__(self):
+        await self.ensure_started()
+        return self
+
+    async def ensure_started(self):
+        if self.started:
+            return
+
+        async with self._starting:
+            if self.started:
+                return
+
             await self.computer.__aenter__()
+            self.started = True
 
     async def __aexit__(self):
         if self.started:
@@ -234,6 +313,8 @@ class ComputerChatBot(ChatBot):
             toolkits=toolkits,
             rules=rules,
         )
+        self.operator: Optional[Operator] = None
+        self.computer: Optional[Computer] = None
 
     async def make_operator(self) -> Operator:
         return Operator()
@@ -248,19 +329,21 @@ class ComputerChatBot(ChatBot):
             thread_context=thread_context, participant=participant
         )
 
-        def render_screen(image_bytes: bytes):
-            for participant in thread_context.participants:
-                self.room.messaging.send_message_nowait(
-                    to=participant,
-                    type="computer_screen",
-                    message={},
-                    attachment=image_bytes,
-                )
+        if self.operator is None:
+            self.operator = await self.make_operator()
+        if self.computer is None:
+            self.computer = await self.make_computer()
+
+        thread_adapter = self._open_threads.get(thread_context.path)
+        if not isinstance(thread_adapter, ThreadAdapter):
+            thread_adapter = None
 
         computer_toolkit = ComputerToolkit(
             operator=self.operator,
             computer=self.computer,
-            render_screen=render_screen,
+            room=self.room,
+            thread_path=thread_context.path,
+            thread_adapter=thread_adapter,
         )
 
         await computer_toolkit.ensure_started()

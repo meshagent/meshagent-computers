@@ -1,14 +1,33 @@
-from playwright.async_api import Browser, Page
-from .base_playwright import BasePlaywrightComputer
-from meshagent.api import RoomClient
 import asyncio
-import os
 import logging
+import os
+import re
+from importlib.metadata import PackageNotFoundError, version as package_version
 
+from playwright.async_api import Browser, Page
+
+from meshagent.api import RoomClient
 from meshagent.api.port_forward import port_forward
+
+from .base_playwright import BasePlaywrightComputer
 
 
 logger = logging.getLogger("computer_use")
+PLAYWRIGHT_CONTAINER_NAME = "playwright"
+
+
+def _playwright_version() -> str:
+    try:
+        raw_version = package_version("playwright")
+    except PackageNotFoundError as exc:
+        raise RuntimeError("playwright is not installed") from exc
+
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", raw_version)
+    if match is None:
+        raise RuntimeError(f"unsupported playwright version format: {raw_version!r}")
+
+    major, minor, patch = match.groups()
+    return f"{major}.{minor}.{patch}"
 
 
 class ContainerPlaywrightComputer(BasePlaywrightComputer):
@@ -18,12 +37,21 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         self,
         *,
         headless: bool = False,
-        image: str = "mcr.microsoft.com/playwright:v1.57.0-noble",
+        image: str | None = None,
         room: RoomClient,
     ):
         super().__init__()
         self.headless = headless
-        self.image = image
+        self.playwright_version = _playwright_version()
+        self.image = image or (
+            f"mcr.microsoft.com/playwright:v{self.playwright_version}-noble"
+        )
+        self.container_name = PLAYWRIGHT_CONTAINER_NAME
+        self.container_command = (
+            '/bin/sh -c "npx -y playwright'
+            f"@{self.playwright_version}"
+            ' run-server --port 3000 --host 0.0.0.0"'
+        )
         self.room = room
         self.container_fut = None
         self._forwarder = None
@@ -32,15 +60,34 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         containers = await self.room.containers.list()
 
         for container in containers:
-            if container.name == "playwright":
-                logger.info("playwright container found, using existing container")
-                return container.id
+            if container.name != self.container_name:
+                continue
+
+            if container.image != self.image:
+                logger.info(
+                    "playwright container image mismatch, recreating: %s != %s",
+                    container.image,
+                    self.image,
+                )
+                await self.room.containers.delete(container_id=container.id)
+                break
+
+            if container.state != "RUNNING":
+                logger.info(
+                    "playwright container not running, recreating (state=%s)",
+                    container.state,
+                )
+                await self.room.containers.delete(container_id=container.id)
+                break
+
+            logger.info("playwright container found, using existing container")
+            return container.id
 
         logger.info("playwright container not found, spinning up")
         return await self.room.containers.run(
-            name="playwright",
+            name=self.container_name,
             image=self.image,
-            command='/bin/sh -c "npx -y playwright@1.57.0 run-server --port 3000 --host 0.0.0.0"',
+            command=self.container_command,
             writable_root_fs=True,
             ports={3000: 3000},
         )
