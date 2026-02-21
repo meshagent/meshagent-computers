@@ -4,6 +4,7 @@ import pytest
 
 from meshagent.agents.images_database import SavedImage
 from meshagent.computers.agent import ComputerToolkit
+from meshagent.tools import ToolContext
 
 
 class _FakeComputer:
@@ -63,6 +64,17 @@ class _FakeImagesDatabase:
         )
 
 
+class _FakeOperator:
+    def __init__(self):
+        self.calls: list[dict[str, Any]] = []
+
+    async def play(
+        self, *, computer: _FakeComputer, item: dict[str, Any]
+    ) -> list[dict]:
+        self.calls.append({"computer": computer, "item": item})
+        return [{"type": "computer_call_output", "output": None}]
+
+
 class _FakeThreadAdapter:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
@@ -75,6 +87,8 @@ class _FakeThreadAdapter:
         mime_type: str,
         created_at: str,
         created_by: str,
+        width: int | float | None = None,
+        height: int | float | None = None,
         status: str | None = None,
         status_detail: str | None = None,
     ) -> str:
@@ -85,6 +99,8 @@ class _FakeThreadAdapter:
                 "mime_type": mime_type,
                 "created_at": created_at,
                 "created_by": created_by,
+                "width": width,
+                "height": height,
                 "status": status,
                 "status_detail": status_detail,
             }
@@ -121,6 +137,8 @@ async def test_default_render_screen_saves_and_attaches_screenshot():
     assert adapter.calls[0]["image_id"] == "img_1"
     assert adapter.calls[0]["mime_type"] == "image/png"
     assert adapter.calls[0]["created_by"] == "agent"
+    assert adapter.calls[0]["width"] == 1024
+    assert adapter.calls[0]["height"] == 768
     assert adapter.calls[0]["status"] == "completed"
     assert adapter.calls[0]["status_detail"] == "Screenshot saved"
     assert isinstance(adapter.calls[0]["message_id"], str)
@@ -144,3 +162,36 @@ async def test_default_render_screen_skips_without_thread_context():
 
     assert images_db.calls == []
     assert adapter.calls == []
+
+
+@pytest.mark.asyncio
+async def test_computer_tool_emits_startup_progress_events():
+    operator = _FakeOperator()
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=operator,
+        room=room,
+        render_screen=None,
+    )
+    events: list[dict[str, Any]] = []
+    context = ToolContext(
+        room=room,
+        caller=room.local_participant,
+        event_handler=lambda event: events.append(event),
+    )
+
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+    result = await computer_tool.handle_computer_call(
+        context=context,
+        type="computer_call",
+        action={"type": "wait"},
+    )
+
+    assert result["type"] == "computer_call_output"
+    assert len(operator.calls) == 1
+    assert len(events) == 2
+    assert [event["state"] for event in events] == ["in_progress", "completed"]
+    assert events[0]["headline"] == "Starting browser automation session"
+    assert events[1]["headline"] == "Browser automation session ready"
+    assert events[0]["correlation_key"] == events[1]["correlation_key"]

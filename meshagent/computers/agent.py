@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import inspect
+import json
 import logging
 import uuid
 from typing import Awaitable, Callable, Optional
@@ -64,8 +65,7 @@ class ComputerTool(OpenAIResponsesTool):
         return {"computer_call": self.handle_computer_call}
 
     async def handle_computer_call(self, context: ToolContext, **arguments):
-        if not self.toolkit.started:
-            await self.toolkit.__aenter__()
+        await self.toolkit.ensure_started(context=context)
 
         logger.info("handling computer")
         outputs = await self.operator.play(computer=self.computer, item=arguments)
@@ -145,8 +145,7 @@ class GotoURL(Tool):
         )
 
     async def execute(self, context: ToolContext, url: str):
-        if not self.toolkit.started:
-            await self.toolkit.__aenter__()
+        await self.toolkit.ensure_started(context=context)
 
         if not url.startswith("https://") and not url.startswith("http://"):
             url = "https://" + url
@@ -252,12 +251,15 @@ class ComputerToolkit(Toolkit):
             return
 
         try:
+            width, height = self.computer.dimensions
             self.thread_adapter.write_image(
                 message_id=str(uuid.uuid4()),
                 image_id=saved_image.id,
                 mime_type=saved_image.mime_type,
                 created_at=saved_image.created_at,
                 created_by=saved_image.created_by,
+                width=width,
+                height=height,
                 status="completed",
                 status_detail="Screenshot saved",
             )
@@ -268,7 +270,62 @@ class ComputerToolkit(Toolkit):
         await self.ensure_started()
         return self
 
-    async def ensure_started(self):
+    def _startup_event_key(self) -> str:
+        return f"{self.name}:startup"
+
+    def _startup_headlines(self) -> tuple[str, str, str]:
+        if isinstance(self.computer, ContainerPlaywrightComputer):
+            return (
+                "Starting Playwright container",
+                "Playwright container ready",
+                "Failed to start Playwright container",
+            )
+
+        return (
+            "Starting browser automation session",
+            "Browser automation session ready",
+            "Failed to start browser automation session",
+        )
+
+    def _emit_startup_event(
+        self, *, context: Optional[ToolContext], state: str
+    ) -> None:
+        if context is None:
+            return
+
+        starting, ready, failed = self._startup_headlines()
+        if state == "completed":
+            headline = ready
+        elif state == "failed":
+            headline = failed
+        else:
+            headline = starting
+
+        context.emit(
+            {
+                "type": "agent.event",
+                "source": "computer",
+                "name": "computer.startup",
+                "kind": "tool",
+                "state": state,
+                "method": "computer.startup",
+                "correlation_key": self._startup_event_key(),
+                "summary": headline,
+                "headline": headline,
+                "details": [],
+                "data": json.dumps(
+                    {
+                        "toolkit": self.name,
+                        "computer": type(self.computer).__name__,
+                        "state": state,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            }
+        )
+
+    async def ensure_started(self, *, context: Optional[ToolContext] = None):
         if self.started:
             return
 
@@ -276,8 +333,15 @@ class ComputerToolkit(Toolkit):
             if self.started:
                 return
 
-            await self.computer.__aenter__()
-            self.started = True
+            self._emit_startup_event(context=context, state="in_progress")
+            try:
+                await self.computer.__aenter__()
+                self.started = True
+            except Exception:
+                self._emit_startup_event(context=context, state="failed")
+                raise
+
+            self._emit_startup_event(context=context, state="completed")
 
     async def __aexit__(self):
         if self.started:
@@ -345,7 +409,5 @@ class ComputerChatBot(ChatBot):
             thread_path=thread_context.path,
             thread_adapter=thread_adapter,
         )
-
-        await computer_toolkit.ensure_started()
 
         return [computer_toolkit, *toolkits]
