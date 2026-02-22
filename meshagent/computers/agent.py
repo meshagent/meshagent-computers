@@ -1,10 +1,9 @@
 import asyncio
 import base64
 import inspect
-import json
 import logging
 import uuid
-from typing import Awaitable, Callable, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from meshagent.agents import LLMAdapter
 from meshagent.agents.images_database import ImagesDatabase
@@ -65,24 +64,39 @@ class ComputerTool(OpenAIResponsesTool):
         return {"computer_call": self.handle_computer_call}
 
     async def handle_computer_call(self, context: ToolContext, **arguments):
-        await self.toolkit.ensure_started(context=context)
+        async def run() -> AsyncIterator[dict[str, Any]]:
+            emit_startup_status = not self.toolkit.started
+            if emit_startup_status:
+                yield self.toolkit.make_startup_event(state="in_progress")
 
-        logger.info("handling computer")
-        outputs = await self.operator.play(computer=self.computer, item=arguments)
-        if self.render_screen is not None:
-            for output in outputs:
-                if output["type"] == "computer_call_output":
-                    if output["output"] is not None:
-                        if output["output"]["type"] == "input_image":
-                            b64: str = output["output"]["image_url"]
-                            image_data_b64 = b64.split(",", 1)
+            try:
+                await self.toolkit.ensure_started()
+            except Exception:
+                if emit_startup_status:
+                    yield self.toolkit.make_startup_event(state="failed")
+                raise
 
-                            image_bytes = base64.b64decode(image_data_b64[1])
-                            render_result = self.render_screen(image_bytes)
-                            if inspect.isawaitable(render_result):
-                                await render_result
+            if emit_startup_status:
+                yield self.toolkit.make_startup_event(state="completed")
 
-        return outputs[0]
+            logger.info("handling computer")
+            outputs = await self.operator.play(computer=self.computer, item=arguments)
+            if self.render_screen is not None:
+                for output in outputs:
+                    if output["type"] == "computer_call_output":
+                        if output["output"] is not None:
+                            if output["output"]["type"] == "input_image":
+                                b64: str = output["output"]["image_url"]
+                                image_data_b64 = b64.split(",", 1)
+
+                                image_bytes = base64.b64decode(image_data_b64[1])
+                                render_result = self.render_screen(image_bytes)
+                                if inspect.isawaitable(render_result):
+                                    await render_result
+
+            yield outputs[0]
+
+        return run()
 
 
 class ScreenshotTool(Tool):
@@ -145,7 +159,7 @@ class GotoURL(Tool):
         )
 
     async def execute(self, context: ToolContext, url: str):
-        await self.toolkit.ensure_started(context=context)
+        await self.toolkit.ensure_started()
 
         if not url.startswith("https://") and not url.startswith("http://"):
             url = "https://" + url
@@ -287,12 +301,7 @@ class ComputerToolkit(Toolkit):
             "Failed to start browser automation session",
         )
 
-    def _emit_startup_event(
-        self, *, context: Optional[ToolContext], state: str
-    ) -> None:
-        if context is None:
-            return
-
+    def make_startup_event(self, *, state: str) -> dict[str, Any]:
         starting, ready, failed = self._startup_headlines()
         if state == "completed":
             headline = ready
@@ -301,47 +310,30 @@ class ComputerToolkit(Toolkit):
         else:
             headline = starting
 
-        context.emit(
-            {
-                "type": "agent.event",
-                "source": "computer",
-                "name": "computer.startup",
-                "kind": "tool",
-                "state": state,
-                "method": "computer.startup",
-                "correlation_key": self._startup_event_key(),
-                "summary": headline,
-                "headline": headline,
-                "details": [],
-                "data": json.dumps(
-                    {
-                        "toolkit": self.name,
-                        "computer": type(self.computer).__name__,
-                        "state": state,
-                    },
-                    ensure_ascii=False,
-                    default=str,
-                ),
-            }
-        )
+        return {
+            "type": "agent.event",
+            "source": "computer",
+            "name": "computer.startup",
+            "kind": "tool",
+            "state": state,
+            "method": "computer.startup",
+            "correlation_key": self._startup_event_key(),
+            "summary": headline,
+            "headline": headline,
+            "details": [],
+        }
 
-    async def ensure_started(self, *, context: Optional[ToolContext] = None):
+    async def ensure_started(self):
         if self.started:
-            return
+            return False
 
         async with self._starting:
             if self.started:
-                return
+                return False
 
-            self._emit_startup_event(context=context, state="in_progress")
-            try:
-                await self.computer.__aenter__()
-                self.started = True
-            except Exception:
-                self._emit_startup_event(context=context, state="failed")
-                raise
-
-            self._emit_startup_event(context=context, state="completed")
+            await self.computer.__aenter__()
+            self.started = True
+            return True
 
     async def __aexit__(self):
         if self.started:

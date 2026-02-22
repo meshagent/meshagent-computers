@@ -174,24 +174,25 @@ async def test_computer_tool_emits_startup_progress_events():
         room=room,
         render_screen=None,
     )
-    events: list[dict[str, Any]] = []
-    context = ToolContext(
-        room=room,
-        caller=room.local_participant,
-        event_handler=lambda event: events.append(event),
-    )
+    context = ToolContext(room=room, caller=room.local_participant)
 
     computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
-    result = await computer_tool.handle_computer_call(
+    stream = await computer_tool.handle_computer_call(
         context=context,
         type="computer_call",
         action={"type": "wait"},
     )
+    outputs: list[dict[str, Any]] = []
+    async for item in stream:
+        outputs.append(item)
 
-    assert result["type"] == "computer_call_output"
+    assert len(outputs) == 3
+    assert outputs[0]["type"] == "agent.event"
+    assert outputs[0]["state"] == "in_progress"
+    assert outputs[1]["type"] == "agent.event"
+    assert outputs[1]["state"] == "completed"
+    assert outputs[2]["type"] == "computer_call_output"
     assert len(operator.calls) == 1
-    assert len(events) == 2
-    assert [event["state"] for event in events] == ["in_progress", "completed"]
-    assert events[0]["headline"] == "Starting browser automation session"
-    assert events[1]["headline"] == "Browser automation session ready"
-    assert events[0]["correlation_key"] == events[1]["correlation_key"]
+    assert outputs[0]["headline"] == "Starting browser automation session"
+    assert outputs[1]["headline"] == "Browser automation session ready"
+    assert outputs[0]["correlation_key"] == outputs[1]["correlation_key"]
