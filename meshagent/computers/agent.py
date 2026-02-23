@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 from meshagent.agents import LLMAdapter
 from meshagent.agents.images_database import ImagesDatabase
 from meshagent.agents.thread_adapter import ThreadAdapter
-from meshagent.tools import Tool, Toolkit, ToolContext
+from meshagent.tools import FunctionTool, Toolkit, ToolContext
 from meshagent.computers import (
     Computer,
     Operator,
@@ -99,7 +99,7 @@ class ComputerTool(OpenAIResponsesTool):
         return run()
 
 
-class ScreenshotTool(Tool):
+class ScreenshotTool(FunctionTool):
     def __init__(self, computer: Computer):
         self.computer = computer
 
@@ -130,7 +130,7 @@ class ScreenshotTool(Tool):
         return f"saved screenshot to {save_path}"
 
 
-class GotoURL(Tool):
+class GotoURL(FunctionTool):
     def __init__(
         self,
         computer: Computer,
