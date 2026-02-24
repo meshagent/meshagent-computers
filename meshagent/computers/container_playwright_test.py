@@ -8,6 +8,64 @@ from meshagent.computers import container_playwright as container_playwright_mod
 from meshagent.computers.container_playwright import ContainerPlaywrightComputer
 
 
+def test_playwright_version_falls_back_to_repo_module_and_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def _missing_metadata(name: str) -> str:
+        del name
+        raise container_playwright_module.PackageNotFoundError("playwright")
+
+    monkeypatch.setattr(
+        container_playwright_module,
+        "package_version",
+        _missing_metadata,
+    )
+    monkeypatch.setattr(
+        container_playwright_module,
+        "import_module",
+        lambda module: SimpleNamespace(version="1.58.0"),
+    )
+
+    caplog.set_level("WARNING", logger="computer_use")
+
+    assert container_playwright_module._playwright_version() == "1.58.0"
+    assert any(
+        "package metadata is unavailable" in record.message for record in caplog.records
+    )
+
+
+def test_playwright_version_no_warning_when_fallback_module_is_missing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def _missing_metadata(name: str) -> str:
+        del name
+        raise container_playwright_module.PackageNotFoundError("playwright")
+
+    def _missing_module(module: str) -> SimpleNamespace:
+        del module
+        raise ModuleNotFoundError("playwright._repo_version")
+
+    monkeypatch.setattr(
+        container_playwright_module,
+        "package_version",
+        _missing_metadata,
+    )
+    monkeypatch.setattr(
+        container_playwright_module,
+        "import_module",
+        _missing_module,
+    )
+
+    caplog.set_level("WARNING", logger="computer_use")
+
+    with pytest.raises(RuntimeError, match="playwright is not installed"):
+        container_playwright_module._playwright_version()
+
+    assert not any(
+        "package metadata is unavailable" in record.message for record in caplog.records
+    )
+
+
 class _FakePage:
     def __init__(self) -> None:
         self.viewport_calls: list[dict[str, int]] = []

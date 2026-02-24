@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version as package_version
 
 from playwright.async_api import Browser, Page
@@ -23,8 +24,19 @@ PLAYWRIGHT_CONNECT_BACKOFF_MAX_SECONDS = 4.0
 def _playwright_version() -> str:
     try:
         raw_version = package_version("playwright")
-    except PackageNotFoundError as exc:
-        raise RuntimeError("playwright is not installed") from exc
+    except PackageNotFoundError:
+        try:
+            repo_version_module = import_module("playwright._repo_version")
+            raw_version = repo_version_module.version
+        except Exception as exc:
+            raise RuntimeError("playwright is not installed") from exc
+        logger.warning(
+            "playwright package metadata is unavailable; "
+            "using playwright._repo_version.version fallback"
+        )
+
+    if not isinstance(raw_version, str):
+        raise RuntimeError("playwright is not installed")
 
     match = re.match(r"^(\d+)\.(\d+)\.(\d+)", raw_version)
     if match is None:
