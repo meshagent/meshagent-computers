@@ -239,3 +239,59 @@ async def test_container_playwright_retry_times_out_with_max_deadline(
     assert len(chromium.connect_calls) == 1
     assert len(forwarders) == 1
     assert forwarders[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_retries_direct_connect_on_connection_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_SESSION_ID", "session_1")
+    monkeypatch.delenv("MESHAGENT_TUNNEL_PLAYWRIGHT", raising=False)
+
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    computer.connect_timeout_seconds = 5.0
+    computer.connect_backoff_initial_seconds = 0.1
+    computer.connect_backoff_max_seconds = 0.5
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(container_playwright_module.asyncio, "sleep", _fake_sleep)
+
+    async def _unexpected_port_forward(*, container_id: str, port: int, token: str):
+        del container_id
+        del port
+        del token
+        raise AssertionError("port forward should not be used for direct connect mode")
+
+    monkeypatch.setattr(
+        container_playwright_module, "port_forward", _unexpected_port_forward
+    )
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(
+        responses=[
+            RuntimeError("connect ECONNREFUSED 127.0.0.1:3000"),
+            browser,
+        ]
+    )
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert len(chromium.connect_calls) == 2
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:3000/"
+    assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:3000/"
+    assert sleep_calls == [0.1]
+    assert computer._forwarder is None

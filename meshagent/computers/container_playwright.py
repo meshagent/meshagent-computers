@@ -59,9 +59,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         super().__init__()
         self.headless = headless
         self.playwright_version = _playwright_version()
-        self.image = image or (
-            f"mcr.microsoft.com/playwright:v{self.playwright_version}-noble"
-        )
+        self.image = image or "meshagent/playwright:default"
         self.container_name = PLAYWRIGHT_CONTAINER_NAME
         self.container_command = (
             '/bin/sh -c "npx -y playwright'
@@ -125,12 +123,6 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         finally:
             await self._close_forwarder()
 
-    def _use_port_forward(self) -> bool:
-        return (
-            os.getenv("MESHAGENT_SESSION_ID") is None
-            or os.getenv("MESHAGENT_TUNNEL_PLAYWRIGHT") is not None
-        )
-
     async def _close_forwarder(self) -> None:
         if self._forwarder is None:
             return
@@ -138,10 +130,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         self._forwarder = None
         await forwarder.close()
 
-    async def _base_url(self, *, container_id: str, use_port_forward: bool) -> str:
-        if not use_port_forward:
-            return f"ws://127.0.0.1:{PLAYWRIGHT_REMOTE_PORT}/"
-
+    async def _base_url(self, *, container_id: str) -> str:
         if self._forwarder is None:
             logger.info("exposing local port forward for remote playwright container")
             self._forwarder = await port_forward(
@@ -156,12 +145,16 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
     def _is_version_mismatch_error(error: Exception) -> bool:
         return "playwright version mismatch" in str(error).lower()
 
+    @staticmethod
+    def _is_connection_refused_error(error: Exception) -> bool:
+        message = str(error).lower()
+        return "econnrefused" in message or "connection refused" in message
+
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
         container_id = await self.ensure_container()
 
         width, height = self.dimensions
         headers = {}
-        use_port_forward = self._use_port_forward()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.connect_timeout_seconds
         backoff_seconds = self.connect_backoff_initial_seconds
@@ -171,7 +164,6 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
             try:
                 base_url = await self._base_url(
                     container_id=container_id,
-                    use_port_forward=use_port_forward,
                 )
                 logger.info(
                     "connecting to playwright (attempt %s): %s", attempt, base_url
@@ -186,7 +178,8 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 if self._is_version_mismatch_error(error):
                     raise
 
-                if not use_port_forward:
+                should_retry = self._is_connection_refused_error(error)
+                if not should_retry:
                     raise
 
                 now = loop.time()
@@ -194,13 +187,13 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 if remaining_seconds <= 0:
                     await self._close_forwarder()
                     raise TimeoutError(
-                        "timed out waiting for playwright port forward to become ready"
+                        "timed out waiting for playwright websocket endpoint to become ready"
                     ) from error
 
                 delay_seconds = min(backoff_seconds, remaining_seconds)
                 logger.warning(
                     (
-                        "failed to connect to playwright over port forward on attempt %s; "
+                        "failed to connect to playwright on attempt %s; "
                         "retrying in %.2fs"
                     ),
                     attempt,
