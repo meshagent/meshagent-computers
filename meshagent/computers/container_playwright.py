@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import re
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version as package_version
