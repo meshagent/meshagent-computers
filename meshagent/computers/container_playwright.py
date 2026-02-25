@@ -54,6 +54,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         headless: bool = False,
         image: str | None = None,
         room: RoomClient,
+        env: dict[str, str] | None = None,
     ):
         super().__init__()
         self.headless = headless
@@ -73,6 +74,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
             PLAYWRIGHT_CONNECT_BACKOFF_INITIAL_SECONDS
         )
         self.connect_backoff_max_seconds = PLAYWRIGHT_CONNECT_BACKOFF_MAX_SECONDS
+        self.env = env or {}
 
     async def _find_or_create_container(self):
         containers = await self.room.containers.list()
@@ -80,15 +82,6 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         for container in containers:
             if container.name != self.container_name:
                 continue
-
-            if container.image != self.image:
-                logger.info(
-                    "playwright container image mismatch, recreating: %s != %s",
-                    container.image,
-                    self.image,
-                )
-                await self.room.containers.delete(container_id=container.id)
-                break
 
             if container.state != "RUNNING":
                 logger.info(
@@ -103,6 +96,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
 
         logger.info("playwright container not found, spinning up")
         return await self.room.containers.run(
+            env=self.env,
             name=self.container_name,
             image=self.image,
             command=self.container_command,
