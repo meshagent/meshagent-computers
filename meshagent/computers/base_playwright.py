@@ -49,6 +49,7 @@ class BasePlaywrightComputer:
     dimensions = (1024, 768)
 
     def __init__(self):
+        self._context = None
         self._playwright = None
         self._browser: Browser | None = None
         self._page: Page | None = None
@@ -57,7 +58,15 @@ class BasePlaywrightComputer:
         # Start Playwright and call the subclass hook for getting browser/page
         self._context = async_playwright()
         self._playwright = await self._context.__aenter__()
-        self._browser, self._page = await self._get_browser_and_page()
+        try:
+            self._browser, self._page = await self._get_browser_and_page()
+        except Exception:
+            await self._context.__aexit__(None, None, None)
+            self._context = None
+            self._playwright = None
+            self._browser = None
+            self._page = None
+            raise
 
         # Set up network interception to flag URLs matching domains in BLOCKED_DOMAINS
         async def handle_route(route: Route, request: Request):
@@ -77,10 +86,18 @@ class BasePlaywrightComputer:
             await self._browser.close()
         if self._playwright:
             await self._context.__aexit__(exc_type, exc_val, exc_tb)
+        self._context = None
+        self._playwright = None
+        self._browser = None
+        self._page = None
 
     async def ensure_page(self):
         # After a timeout, we might loose our browser
-        if self._page is None or not self._browser.is_connected:
+        if (
+            self._page is None
+            or self._browser is None
+            or not self._browser.is_connected()
+        ):
             self._browser, self._page = await self._get_browser_and_page()
 
     # --- Common "Computer" actions ---

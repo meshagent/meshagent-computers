@@ -1,10 +1,11 @@
 import asyncio
+import errno
 import logging
 import re
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version as package_version
 
-from playwright.async_api import Browser, Page
+from playwright.async_api import Browser, Error as PlaywrightError, Page
 
 from meshagent.api import RoomClient
 from meshagent.api.port_forward import LocalExposeHandle, port_forward
@@ -139,9 +140,29 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         return "playwright version mismatch" in str(error).lower()
 
     @staticmethod
-    def _is_connection_refused_error(error: Exception) -> bool:
+    def _is_retryable_connect_error(error: Exception) -> bool:
+        if isinstance(error, PlaywrightError):
+            message = str(error).lower()
+            return (
+                "econnrefused" in message
+                or "connection refused" in message
+                or "socket hang up" in message
+                or "econnreset" in message
+                or "connection reset" in message
+            )
+
+        if isinstance(error, OSError):
+            if error.errno in (errno.ECONNREFUSED, errno.ECONNRESET):
+                return True
+
         message = str(error).lower()
-        return "econnrefused" in message or "connection refused" in message
+        return (
+            "econnrefused" in message
+            or "connection refused" in message
+            or "socket hang up" in message
+            or "econnreset" in message
+            or "connection reset" in message
+        )
 
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
         container_id = await self.ensure_container()
@@ -171,7 +192,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 if self._is_version_mismatch_error(error):
                     raise
 
-                should_retry = self._is_connection_refused_error(error)
+                should_retry = self._is_retryable_connect_error(error)
                 if not should_retry:
                     raise
 
@@ -184,13 +205,17 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                     ) from error
 
                 delay_seconds = min(backoff_seconds, remaining_seconds)
-                logger.warning(
+                logger.info(
                     (
                         "failed to connect to playwright on attempt %s; "
-                        "retrying in %.2fs"
+                        "retrying in %.2fs (%s)"
                     ),
                     attempt,
                     delay_seconds,
+                    error,
+                )
+                logger.debug(
+                    "playwright connect retryable error details",
                     exc_info=error,
                 )
                 await self._close_forwarder()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
 
 from meshagent.computers import container_playwright as container_playwright_module
 from meshagent.computers.container_playwright import ContainerPlaywrightComputer
@@ -168,7 +169,7 @@ async def test_container_playwright_retries_connect_on_port_forward_failure(
     browser = _FakeBrowser(page=page)
     chromium = _FakeChromium(
         responses=[
-            RuntimeError("dial tcp4 127.0.0.1:3000: connect: connection refused"),
+            PlaywrightError("dial tcp4 127.0.0.1:3000: connect: connection refused"),
             browser,
         ]
     )
@@ -226,13 +227,13 @@ async def test_container_playwright_retry_times_out_with_max_deadline(
 
     chromium = _FakeChromium(
         responses=[
-            RuntimeError("dial tcp4 127.0.0.1:3000: connect: connection refused"),
+            PlaywrightError("dial tcp4 127.0.0.1:3000: connect: connection refused"),
         ]
     )
     computer._playwright = SimpleNamespace(chromium=chromium)
 
     with pytest.raises(
-        TimeoutError, match="timed out waiting for playwright port forward"
+        TimeoutError, match="timed out waiting for playwright websocket endpoint"
     ):
         await computer._get_browser_and_page()
 
@@ -266,21 +267,28 @@ async def test_container_playwright_retries_direct_connect_on_connection_refused
 
     monkeypatch.setattr(container_playwright_module.asyncio, "sleep", _fake_sleep)
 
-    async def _unexpected_port_forward(*, container_id: str, port: int, token: str):
-        del container_id
-        del port
-        del token
-        raise AssertionError("port forward should not be used for direct connect mode")
+    forwarders: list[_FakeForwarder] = []
 
-    monkeypatch.setattr(
-        container_playwright_module, "port_forward", _unexpected_port_forward
-    )
+    async def _fake_port_forward(
+        *,
+        container_id: str,
+        port: int,
+        token: str,
+    ) -> _FakeForwarder:
+        assert container_id == "container_1"
+        assert port == 3000
+        assert token == "token"
+        forwarder = _FakeForwarder(host="127.0.0.1", port=64000 + len(forwarders))
+        forwarders.append(forwarder)
+        return forwarder
+
+    monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
 
     page = _FakePage()
     browser = _FakeBrowser(page=page)
     chromium = _FakeChromium(
         responses=[
-            RuntimeError("connect ECONNREFUSED 127.0.0.1:3000"),
+            PlaywrightError("connect ECONNREFUSED 127.0.0.1:3000"),
             browser,
         ]
     )
@@ -291,7 +299,76 @@ async def test_container_playwright_retries_direct_connect_on_connection_refused
     assert connected_browser is browser
     assert connected_page is page
     assert len(chromium.connect_calls) == 2
-    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:3000/"
-    assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:3000/"
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:64000/"
+    assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:64001/"
     assert sleep_calls == [0.1]
-    assert computer._forwarder is None
+    assert len(forwarders) == 2
+    assert forwarders[0].close_calls == 1
+    assert forwarders[1].close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_retries_direct_connect_on_socket_hang_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_SESSION_ID", "session_1")
+    monkeypatch.delenv("MESHAGENT_TUNNEL_PLAYWRIGHT", raising=False)
+
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    computer.connect_timeout_seconds = 5.0
+    computer.connect_backoff_initial_seconds = 0.1
+    computer.connect_backoff_max_seconds = 0.5
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(container_playwright_module.asyncio, "sleep", _fake_sleep)
+
+    forwarders: list[_FakeForwarder] = []
+
+    async def _fake_port_forward(
+        *,
+        container_id: str,
+        port: int,
+        token: str,
+    ) -> _FakeForwarder:
+        assert container_id == "container_1"
+        assert port == 3000
+        assert token == "token"
+        forwarder = _FakeForwarder(host="127.0.0.1", port=65000 + len(forwarders))
+        forwarders.append(forwarder)
+        return forwarder
+
+    monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(
+        responses=[
+            PlaywrightError(
+                "BrowserType.connect: WebSocket error: socket hang up code=1006"
+            ),
+            browser,
+        ]
+    )
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert len(chromium.connect_calls) == 2
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:65000/"
+    assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:65001/"
+    assert sleep_calls == [0.1]
+    assert len(forwarders) == 2
+    assert forwarders[0].close_calls == 1
+    assert forwarders[1].close_calls == 0
