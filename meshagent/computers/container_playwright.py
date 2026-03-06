@@ -56,8 +56,9 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         image: str | None = None,
         room: RoomClient,
         env: dict[str, str] | None = None,
+        dimensions: tuple[int, int] | None = None,
     ):
-        super().__init__()
+        super().__init__(dimensions=dimensions)
         self.headless = headless
         self.playwright_version = _playwright_version()
         self.image = image or "meshagent/playwright:default"

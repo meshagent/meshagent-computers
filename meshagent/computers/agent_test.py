@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from meshagent.agents.images_database import SavedImage
+from meshagent.computers import agent as agent_module
 from meshagent.computers.agent import ComputerToolkit
 from meshagent.tools import ToolContext
 
@@ -196,3 +197,86 @@ async def test_computer_tool_emits_startup_progress_events():
     assert outputs[0]["headline"] == "Starting browser automation session"
     assert outputs[1]["headline"] == "Browser automation session ready"
     assert outputs[0]["correlation_key"] == outputs[1]["correlation_key"]
+
+
+def test_computer_tool_uses_responses_computer_type():
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+    )
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+    definitions = computer_tool.get_open_ai_tool_definitions()
+    assert definitions == [{"type": "computer"}]
+
+
+def test_computer_toolkit_passes_dimensions_to_container_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeContainerPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            room: _FakeRoom,
+            headless: bool,
+            dimensions: tuple[int, int] | None = None,
+        ):
+            recorded["room"] = room
+            recorded["headless"] = headless
+            recorded["dimensions"] = dimensions
+            self.dimensions = dimensions or (1440, 900)
+
+    monkeypatch.setattr(
+        agent_module,
+        "ContainerPlaywrightComputer",
+        _FakeContainerPlaywrightComputer,
+    )
+
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        room=room,
+        dimensions=(1600, 900),
+        render_screen=None,
+    )
+
+    assert recorded["room"] is room
+    assert recorded["headless"] is True
+    assert recorded["dimensions"] == (1600, 900)
+    assert toolkit.computer.dimensions == (1600, 900)
+
+
+def test_computer_toolkit_passes_dimensions_to_local_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeLocalPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(self, *, dimensions: tuple[int, int] | None = None):
+            recorded["dimensions"] = dimensions
+            self.dimensions = dimensions or (1440, 900)
+
+    monkeypatch.setattr(
+        agent_module,
+        "LocalPlaywrightComputer",
+        _FakeLocalPlaywrightComputer,
+    )
+
+    toolkit = ComputerToolkit(
+        dimensions=(1600, 900),
+        render_screen=None,
+    )
+
+    assert recorded["dimensions"] == (1600, 900)
+    assert toolkit.computer.dimensions == (1600, 900)
+
+
+def test_computer_toolkit_rejects_unsupported_dimensions():
+    with pytest.raises(ValueError, match="dimensions must be one of"):
+        ComputerToolkit(dimensions=(1024, 768))

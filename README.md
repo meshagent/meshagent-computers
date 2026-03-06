@@ -24,8 +24,8 @@ class BrowserbaseAgent(ComputerChatBot):
             description="a task runner that can use a browser",
             requires=[RequiredToolkit(name="ui", tools=[])],
             llm_adapter=OpenAIResponsesAdapter(
-                model="computer-use-preview",
-                response_options={"reasoning": {"generate_summary": "concise"}, "truncation": "auto"},
+                model="gpt-5.4",
+                response_options={"reasoning": {"summary": "concise"}},
             ),
             labels=["tasks", "computers"],
             computer_cls=BrowserbaseBrowser,

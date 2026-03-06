@@ -9,6 +9,11 @@ from meshagent.computers import container_playwright as container_playwright_mod
 from meshagent.computers.container_playwright import ContainerPlaywrightComputer
 
 
+@pytest.fixture(autouse=True)
+def _clear_playwright_dimensions_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", raising=False)
+
+
 def test_playwright_version_falls_back_to_repo_module_and_warns(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -65,6 +70,24 @@ def test_playwright_version_no_warning_when_fallback_module_is_missing(
     assert not any(
         "package metadata is unavailable" in record.message for record in caplog.records
     )
+
+
+def test_container_playwright_uses_supported_dimension_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", "1600x900")
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert computer.dimensions == (1600, 900)
+
+
+def test_container_playwright_falls_back_to_default_for_unsupported_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", "1024x768")
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert computer.dimensions == (1440, 900)
 
 
 class _FakePage:
@@ -186,7 +209,7 @@ async def test_container_playwright_retries_connect_on_port_forward_failure(
     assert len(forwarders) == 2
     assert forwarders[0].close_calls == 1
     assert forwarders[1].close_calls == 0
-    assert page.viewport_calls == [{"width": 1024, "height": 768}]
+    assert page.viewport_calls == [{"width": 1440, "height": 900}]
     assert page.goto_calls == ["https://google.com"]
 
 

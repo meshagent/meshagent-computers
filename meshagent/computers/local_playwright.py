@@ -5,8 +5,12 @@ from .base_playwright import BasePlaywrightComputer
 class LocalPlaywrightComputer(BasePlaywrightComputer):
     """Launches a local Chromium instance using Playwright."""
 
-    def __init__(self, headless: bool = False):
-        super().__init__()
+    def __init__(
+        self,
+        headless: bool = False,
+        dimensions: tuple[int, int] | None = None,
+    ):
+        super().__init__(dimensions=dimensions)
         self.headless = headless
 
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
