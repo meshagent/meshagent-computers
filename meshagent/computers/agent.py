@@ -132,9 +132,11 @@ class ScreenshotTool(FunctionTool):
 
     async def execute(self, context: ToolContext, save_path: str, full_page: bool):
         screenshot_bytes = await self.computer.screenshot_bytes(full_page=full_page)
-        handle = await context.room.storage.open(path=save_path, overwrite=True)
-        await context.room.storage.write(handle=handle, data=screenshot_bytes)
-        await context.room.storage.close(handle=handle)
+        await context.room.storage.upload(
+            path=save_path,
+            data=screenshot_bytes,
+            overwrite=True,
+        )
 
         return f"saved screenshot to {save_path}"
 
