@@ -25,6 +25,7 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
         proxy: bool = False,
         virtual_mouse: bool = True,
         ad_blocker: bool = False,
+        starting_url: str | None = None,
     ):
         """
         Initialize the Browserbase instance. Additional configuration options for features such as persistent cookies, ad blockers, file downloads and more can be found in the Browserbase API documentation: https://docs.browserbase.com/reference/api/create-a-session
@@ -37,7 +38,7 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
             virtual_mouse (bool): Whether to enable the virtual mouse cursor. Default is True.
             ad_blocker (bool): Whether to enable the built-in ad blocker. Default is False.
         """
-        super().__init__()
+        super().__init__(starting_url=starting_url)
         self.bb = AsyncBrowserbase(api_key=os.getenv("BROWSERBASE_API_KEY"))
         self.project_id = os.getenv("BROWSERBASE_PROJECT_ID")
         self.session = None
@@ -129,7 +130,7 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
         page = context.pages[0]
         page.on("close", self._handle_page_close)
 
-        await page.goto("https://google.com")
+        await page.goto(self.starting_url)
 
         return browser, page
 

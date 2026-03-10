@@ -9,8 +9,9 @@ class LocalPlaywrightComputer(BasePlaywrightComputer):
         self,
         headless: bool = False,
         dimensions: tuple[int, int] | None = None,
+        starting_url: str | None = None,
     ):
-        super().__init__(dimensions=dimensions)
+        super().__init__(dimensions=dimensions, starting_url=starting_url)
         self.headless = headless
 
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
@@ -25,5 +26,5 @@ class LocalPlaywrightComputer(BasePlaywrightComputer):
         )
         page = await browser.new_page()
         await page.set_viewport_size({"width": width, "height": height})
-        await page.goto("https://google.com")
+        await page.goto(self.starting_url)
         return browser, page

@@ -186,6 +186,38 @@ class _FakeRoom:
 
 
 @pytest.mark.asyncio
+async def test_container_playwright_uses_custom_starting_url() -> None:
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(
+        room=room,
+        headless=True,
+        starting_url="https://example.com",
+    )
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    async def _base_url(*, container_id: str) -> str:
+        assert container_id == "container_1"
+        return "ws://127.0.0.1:62000/"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+    computer._base_url = _base_url  # type: ignore[method-assign]
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(responses=[browser])
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert page.viewport_calls == [{"width": 1440, "height": 900}]
+    assert page.goto_calls == ["https://example.com"]
+
+
+@pytest.mark.asyncio
 async def test_container_playwright_retries_connect_on_port_forward_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

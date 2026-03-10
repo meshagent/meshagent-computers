@@ -40,6 +40,7 @@ _SUPPORTED_PLAYWRIGHT_DIMENSIONS = {
     (1600, 900),
 }
 _PLAYWRIGHT_DIMENSIONS_ENV_VAR = "MESHAGENT_PLAYWRIGHT_DIMENSIONS"
+DEFAULT_PLAYWRIGHT_STARTING_URL = "https://google.com"
 
 
 def _parse_dimensions(raw_value: str) -> tuple[int, int] | None:
@@ -93,11 +94,20 @@ class BasePlaywrightComputer:
     environment: Literal["browser"] = "browser"
     dimensions = _DEFAULT_PLAYWRIGHT_DIMENSIONS
 
-    def __init__(self, dimensions: tuple[int, int] | None = None):
+    def __init__(
+        self,
+        dimensions: tuple[int, int] | None = None,
+        starting_url: str | None = None,
+    ):
         self._context = None
         self._playwright = None
         self._browser: Browser | None = None
         self._page: Page | None = None
+        self.starting_url = (
+            starting_url
+            if isinstance(starting_url, str) and starting_url.strip() != ""
+            else DEFAULT_PLAYWRIGHT_STARTING_URL
+        )
         if dimensions is None:
             self.dimensions = _resolve_playwright_dimensions()
         elif _is_supported_playwright_dimensions(dimensions):

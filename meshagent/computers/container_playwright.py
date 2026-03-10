@@ -76,8 +76,9 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         room: RoomClient,
         env: dict[str, str] | None = None,
         dimensions: tuple[int, int] | None = None,
+        starting_url: str | None = None,
     ):
-        super().__init__(dimensions=dimensions)
+        super().__init__(dimensions=dimensions, starting_url=starting_url)
         self.headless = headless
         self.playwright_version = _playwright_version()
         self.image = image or "meshagent/playwright:default"
@@ -291,5 +292,5 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 attempt += 1
 
         logger.info("playwright ready")
-        await page.goto("https://google.com")
+        await page.goto(self.starting_url)
         return browser, page

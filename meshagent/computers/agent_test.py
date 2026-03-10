@@ -278,11 +278,14 @@ def test_computer_toolkit_passes_dimensions_to_container_computer(
             room: _FakeRoom,
             headless: bool,
             dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
         ):
             recorded["room"] = room
             recorded["headless"] = headless
             recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
             self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
 
     monkeypatch.setattr(
         agent_module,
@@ -300,6 +303,7 @@ def test_computer_toolkit_passes_dimensions_to_container_computer(
     assert recorded["room"] is room
     assert recorded["headless"] is True
     assert recorded["dimensions"] == (1600, 900)
+    assert recorded["starting_url"] is None
     assert toolkit.computer.dimensions == (1600, 900)
 
 
@@ -311,9 +315,16 @@ def test_computer_toolkit_passes_dimensions_to_local_computer(
     class _FakeLocalPlaywrightComputer:
         environment = "browser"
 
-        def __init__(self, *, dimensions: tuple[int, int] | None = None):
+        def __init__(
+            self,
+            *,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
             recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
             self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
 
     monkeypatch.setattr(
         agent_module,
@@ -327,7 +338,95 @@ def test_computer_toolkit_passes_dimensions_to_local_computer(
     )
 
     assert recorded["dimensions"] == (1600, 900)
+    assert recorded["starting_url"] is None
     assert toolkit.computer.dimensions == (1600, 900)
+
+
+def test_computer_toolkit_passes_starting_url_to_container_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeContainerPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            room: _FakeRoom,
+            headless: bool,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
+            recorded["room"] = room
+            recorded["headless"] = headless
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(
+        agent_module,
+        "ContainerPlaywrightComputer",
+        _FakeContainerPlaywrightComputer,
+    )
+
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        room=room,
+        starting_url="https://example.com",
+        render_screen=None,
+    )
+
+    assert recorded["room"] is room
+    assert recorded["headless"] is True
+    assert recorded["dimensions"] is None
+    assert recorded["starting_url"] == "https://example.com"
+    assert toolkit.computer.starting_url == "https://example.com"
+
+
+def test_computer_toolkit_passes_starting_url_to_local_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeLocalPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(
+        agent_module,
+        "LocalPlaywrightComputer",
+        _FakeLocalPlaywrightComputer,
+    )
+
+    toolkit = ComputerToolkit(
+        starting_url="https://example.com",
+        render_screen=None,
+    )
+
+    assert recorded["dimensions"] is None
+    assert recorded["starting_url"] == "https://example.com"
+    assert toolkit.computer.starting_url == "https://example.com"
+
+
+def test_computer_toolkit_rejects_starting_url_for_non_playwright_computers():
+    with pytest.raises(ValueError, match="starting_url requires a Playwright computer"):
+        ComputerToolkit(
+            computer=_FakeComputer(),
+            room=_FakeRoom(name="agent"),
+            starting_url="https://example.com",
+        )
 
 
 def test_computer_toolkit_rejects_unsupported_dimensions():

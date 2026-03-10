@@ -200,8 +200,10 @@ class ComputerToolkit(Toolkit):
         thread_adapter: Optional[ThreadAdapter] = None,
         images_db: Optional[ImagesDatabase] = None,
         include_goto_tool: bool = False,
+        starting_url: str | None = None,
     ):
         _validate_computer_dimensions(dimensions)
+        provided_computer = computer is not None
 
         if operator is None:
             operator = Operator()
@@ -212,15 +214,27 @@ class ComputerToolkit(Toolkit):
                     room=room,
                     headless=True,
                     dimensions=dimensions,
+                    starting_url=starting_url,
                 )
 
             else:
-                computer = LocalPlaywrightComputer(dimensions=dimensions)
+                computer = LocalPlaywrightComputer(
+                    dimensions=dimensions,
+                    starting_url=starting_url,
+                )
         elif dimensions is not None and isinstance(
             computer,
             (ContainerPlaywrightComputer, LocalPlaywrightComputer),
         ):
             computer.dimensions = dimensions
+
+        if provided_computer and starting_url is not None:
+            if isinstance(computer, BasePlaywrightComputer):
+                normalized_starting_url = starting_url.strip()
+                if normalized_starting_url != "":
+                    computer.starting_url = normalized_starting_url
+            else:
+                raise ValueError("starting_url requires a Playwright computer")
 
         self.computer = computer
         self.operator = operator
@@ -384,6 +398,7 @@ class ComputerChatBot(ChatBot):
         toolkits: list[Toolkit] = None,
         dimensions: Optional[tuple[int, int]] = None,
         include_goto_tool: Optional[bool] = None,
+        starting_url: str | None = None,
     ):
         if rules is None:
             rules = []
@@ -401,6 +416,7 @@ class ComputerChatBot(ChatBot):
         self.computer: Optional[Computer] = None
         self.computer_dimensions: Optional[tuple[int, int]] = dimensions
         self.include_goto_tool: Optional[bool] = include_goto_tool
+        self.starting_url: str | None = starting_url
 
     async def make_operator(self) -> Operator:
         return Operator()
@@ -409,6 +425,7 @@ class ComputerChatBot(ChatBot):
         return ContainerPlaywrightComputer(
             room=self.room,
             dimensions=self.computer_dimensions,
+            starting_url=self.starting_url,
         )
 
     async def get_thread_toolkits(
@@ -435,6 +452,7 @@ class ComputerChatBot(ChatBot):
             thread_path=thread_context.path,
             thread_adapter=thread_adapter,
             include_goto_tool=self.include_goto_tool or False,
+            starting_url=self.starting_url,
         )
 
         return [computer_toolkit, *toolkits]
