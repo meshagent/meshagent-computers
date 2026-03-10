@@ -5,6 +5,7 @@ import pytest
 from meshagent.agents.images_database import SavedImage
 from meshagent.computers import agent as agent_module
 from meshagent.computers.agent import ComputerToolkit
+from meshagent.computers.base_playwright import BasePlaywrightComputer
 from meshagent.tools import ToolContext
 
 
@@ -209,6 +210,58 @@ def test_computer_tool_uses_responses_computer_type():
     computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
     definitions = computer_tool.get_open_ai_tool_definitions()
     assert definitions == [{"type": "computer"}]
+
+
+def test_computer_tool_handles_computer_call_output_items():
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+    )
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+
+    handlers = computer_tool.get_open_ai_output_handlers()
+
+    assert handlers["computer_call"] == computer_tool.handle_computer_call
+
+
+def test_computer_toolkit_only_exposes_native_computer_tool_by_default():
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+    )
+
+    assert [tool.name for tool in toolkit.tools] == ["computer_call"]
+
+
+def test_computer_toolkit_rejects_goto_for_non_playwright_computers():
+    with pytest.raises(ValueError, match="goto tool requires a Playwright computer"):
+        ComputerToolkit(
+            computer=_FakeComputer(),
+            operator=_FakeOperator(),
+            room=_FakeRoom(name="agent"),
+            render_screen=None,
+            include_goto_tool=True,
+        )
+
+
+def test_computer_toolkit_can_include_goto_for_playwright_computers():
+    class _FakePlaywrightComputer(BasePlaywrightComputer):
+        async def _get_browser_and_page(self):
+            raise AssertionError("test should not start Playwright")
+
+    toolkit = ComputerToolkit(
+        computer=_FakePlaywrightComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+        include_goto_tool=True,
+    )
+
+    assert [tool.name for tool in toolkit.tools] == ["computer_call", "goto"]
 
 
 def test_computer_toolkit_passes_dimensions_to_container_computer(

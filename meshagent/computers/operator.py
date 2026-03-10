@@ -57,7 +57,10 @@ class Operator:
                 await self.show_image(screenshot_base64)
 
             # if user doesn't ack all safety checks exit with error
-            pending_checks = item.get("pending_safety_checks", [])
+            pending_checks_value = item.get("pending_safety_checks")
+            pending_checks: list[dict] = []
+            if isinstance(pending_checks_value, list):
+                pending_checks = pending_checks_value
             for check in pending_checks:
                 message = check["message"]
                 if not await self.acknowledge_safety_check_callback(message):
@@ -79,7 +82,6 @@ class Operator:
             if computer.environment == "browser":
                 current_url = await computer.get_current_url()
                 check_blocklisted_url(current_url)
-                call_output["output"]["current_url"] = current_url
 
             return [call_output]
         return []

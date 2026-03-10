@@ -52,7 +52,6 @@ async def test_operator_handles_batched_computer_actions():
             "output": {
                 "type": "computer_screenshot",
                 "image_url": "data:image/png;base64,ZmFrZS1zY3JlZW5zaG90",
-                "current_url": "https://example.com",
             },
         }
     ]
@@ -76,6 +75,26 @@ async def test_operator_supports_legacy_single_action_shape():
     assert computer.calls == [("wait", {})]
     assert outputs[0]["type"] == "computer_call_output"
     assert outputs[0]["call_id"] == "call_2"
+
+
+@pytest.mark.asyncio
+async def test_operator_treats_missing_pending_safety_checks_as_empty():
+    operator = Operator()
+    computer = _FakeComputer()
+
+    outputs = await operator.play(
+        computer=computer,
+        item={
+            "type": "computer_call",
+            "call_id": "call_no_checks",
+            "action": {"type": "wait"},
+            "pending_safety_checks": None,
+        },
+    )
+
+    assert computer.calls == [("wait", {})]
+    assert outputs[0]["type"] == "computer_call_output"
+    assert outputs[0]["acknowledged_safety_checks"] == []
 
 
 @pytest.mark.asyncio

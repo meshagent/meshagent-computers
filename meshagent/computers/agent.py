@@ -15,6 +15,7 @@ from meshagent.computers import (
     ContainerPlaywrightComputer,
     LocalPlaywrightComputer,
 )
+from meshagent.computers.base_playwright import BasePlaywrightComputer
 from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
@@ -198,6 +199,7 @@ class ComputerToolkit(Toolkit):
         thread_path: Optional[str] = None,
         thread_adapter: Optional[ThreadAdapter] = None,
         images_db: Optional[ImagesDatabase] = None,
+        include_goto_tool: bool = False,
     ):
         _validate_computer_dimensions(dimensions)
 
@@ -228,27 +230,34 @@ class ComputerToolkit(Toolkit):
         self.thread_path = thread_path
         self.thread_adapter = thread_adapter
         self._images_db = images_db
+        self.include_goto_tool = include_goto_tool
 
         self.render_screen = (
             render_screen if render_screen is not None else self.save_screen_image
         )
 
-        super().__init__(
-            name=name,
-            tools=[
-                ComputerTool(
-                    computer=computer,
-                    operator=operator,
-                    render_screen=self.render_screen,
-                    toolkit=self,
-                ),
-                # ScreenshotTool(computer=computer),
+        tools = [
+            ComputerTool(
+                computer=computer,
+                operator=operator,
+                render_screen=self.render_screen,
+                toolkit=self,
+            ),
+        ]
+        if include_goto_tool:
+            if not isinstance(computer, BasePlaywrightComputer):
+                raise ValueError("goto tool requires a Playwright computer")
+            tools.append(
                 GotoURL(
                     computer=computer,
                     toolkit=self,
                     render_screen=self.render_screen,
-                ),
-            ],
+                )
+            )
+
+        super().__init__(
+            name=name,
+            tools=tools,
         )
 
     async def save_screen_image(self, image_bytes: bytes) -> None:
@@ -374,12 +383,10 @@ class ComputerChatBot(ChatBot):
         llm_adapter: Optional[LLMAdapter] = None,
         toolkits: list[Toolkit] = None,
         dimensions: Optional[tuple[int, int]] = None,
+        include_goto_tool: Optional[bool] = None,
     ):
         if rules is None:
-            rules = [
-                "if asked to go to a URL, you MUST use the goto function to go to the url if it is available",
-                "after going directly to a URL, the screen will change so you should take a look at it to know what to do next",
-            ]
+            rules = []
         super().__init__(
             name=name,
             title=title,
@@ -393,6 +400,7 @@ class ComputerChatBot(ChatBot):
         self.operator: Optional[Operator] = None
         self.computer: Optional[Computer] = None
         self.computer_dimensions: Optional[tuple[int, int]] = dimensions
+        self.include_goto_tool: Optional[bool] = include_goto_tool
 
     async def make_operator(self) -> Operator:
         return Operator()
@@ -426,6 +434,7 @@ class ComputerChatBot(ChatBot):
             room=self.room,
             thread_path=thread_context.path,
             thread_adapter=thread_adapter,
+            include_goto_tool=self.include_goto_tool or False,
         )
 
         return [computer_toolkit, *toolkits]
