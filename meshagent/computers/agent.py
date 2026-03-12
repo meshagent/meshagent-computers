@@ -15,6 +15,7 @@ from meshagent.computers import (
     ContainerPlaywrightComputer,
     LocalPlaywrightComputer,
 )
+from meshagent.computers.base_playwright import BasePlaywrightComputer
 from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
@@ -22,6 +23,17 @@ from meshagent.api import RoomClient
 
 logger = logging.getLogger("computer")
 logger.setLevel(logging.WARN)
+
+_SUPPORTED_COMPUTER_DIMENSIONS = {(1440, 900), (1600, 900)}
+
+
+def _validate_computer_dimensions(
+    dimensions: Optional[tuple[int, int]],
+) -> None:
+    if dimensions is None:
+        return
+    if dimensions not in _SUPPORTED_COMPUTER_DIMENSIONS:
+        raise ValueError("dimensions must be one of: (1440, 900), (1600, 900)")
 
 
 class ComputerTool(OpenAIResponsesTool):
@@ -31,7 +43,7 @@ class ComputerTool(OpenAIResponsesTool):
         operator: Operator,
         computer: Computer,
         title="computer_call",
-        description="handle computer calls from computer use preview",
+        description="handle computer tool calls",
         rules=[],
         thumbnail_url=None,
         render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
@@ -53,10 +65,7 @@ class ComputerTool(OpenAIResponsesTool):
     def get_open_ai_tool_definitions(self) -> list[dict]:
         return [
             {
-                "type": "computer_use_preview",
-                "display_width": self.computer.dimensions[0],
-                "display_height": self.computer.dimensions[1],
-                "environment": self.computer.environment,
+                "type": "computer",
             }
         ]
 
@@ -85,7 +94,8 @@ class ComputerTool(OpenAIResponsesTool):
                 for output in outputs:
                     if output["type"] == "computer_call_output":
                         if output["output"] is not None:
-                            if output["output"]["type"] == "input_image":
+                            output_type = output["output"].get("type")
+                            if output_type in {"input_image", "computer_screenshot"}:
                                 b64: str = output["output"]["image_url"]
                                 image_data_b64 = b64.split(",", 1)
 
@@ -123,9 +133,11 @@ class ScreenshotTool(FunctionTool):
 
     async def execute(self, context: ToolContext, save_path: str, full_page: bool):
         screenshot_bytes = await self.computer.screenshot_bytes(full_page=full_page)
-        handle = await context.room.storage.open(path=save_path, overwrite=True)
-        await context.room.storage.write(handle=handle, data=screenshot_bytes)
-        await context.room.storage.close(handle=handle)
+        await context.room.storage.upload(
+            path=save_path,
+            data=screenshot_bytes,
+            overwrite=True,
+        )
 
         return f"saved screenshot to {save_path}"
 
@@ -180,13 +192,19 @@ class ComputerToolkit(Toolkit):
         *,
         name: str = "meshagent.openai.computer",
         computer: Optional[Computer] = None,
+        dimensions: Optional[tuple[int, int]] = None,
         operator: Optional[Operator] = None,
         room: Optional[RoomClient] = None,
         render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
         thread_path: Optional[str] = None,
         thread_adapter: Optional[ThreadAdapter] = None,
         images_db: Optional[ImagesDatabase] = None,
+        include_goto_tool: bool = False,
+        starting_url: str | None = None,
     ):
+        _validate_computer_dimensions(dimensions)
+        provided_computer = computer is not None
+
         if operator is None:
             operator = Operator()
 
@@ -195,10 +213,28 @@ class ComputerToolkit(Toolkit):
                 computer = ContainerPlaywrightComputer(
                     room=room,
                     headless=True,
+                    dimensions=dimensions,
+                    starting_url=starting_url,
                 )
 
             else:
-                computer = LocalPlaywrightComputer()
+                computer = LocalPlaywrightComputer(
+                    dimensions=dimensions,
+                    starting_url=starting_url,
+                )
+        elif dimensions is not None and isinstance(
+            computer,
+            (ContainerPlaywrightComputer, LocalPlaywrightComputer),
+        ):
+            computer.dimensions = dimensions
+
+        if provided_computer and starting_url is not None:
+            if isinstance(computer, BasePlaywrightComputer):
+                normalized_starting_url = starting_url.strip()
+                if normalized_starting_url != "":
+                    computer.starting_url = normalized_starting_url
+            else:
+                raise ValueError("starting_url requires a Playwright computer")
 
         self.computer = computer
         self.operator = operator
@@ -208,27 +244,34 @@ class ComputerToolkit(Toolkit):
         self.thread_path = thread_path
         self.thread_adapter = thread_adapter
         self._images_db = images_db
+        self.include_goto_tool = include_goto_tool
 
         self.render_screen = (
             render_screen if render_screen is not None else self.save_screen_image
         )
 
-        super().__init__(
-            name=name,
-            tools=[
-                ComputerTool(
-                    computer=computer,
-                    operator=operator,
-                    render_screen=self.render_screen,
-                    toolkit=self,
-                ),
-                # ScreenshotTool(computer=computer),
+        tools = [
+            ComputerTool(
+                computer=computer,
+                operator=operator,
+                render_screen=self.render_screen,
+                toolkit=self,
+            ),
+        ]
+        if include_goto_tool:
+            if not isinstance(computer, BasePlaywrightComputer):
+                raise ValueError("goto tool requires a Playwright computer")
+            tools.append(
                 GotoURL(
                     computer=computer,
                     toolkit=self,
                     render_screen=self.render_screen,
-                ),
-            ],
+                )
+            )
+
+        super().__init__(
+            name=name,
+            tools=tools,
         )
 
     async def save_screen_image(self, image_bytes: bytes) -> None:
@@ -353,12 +396,12 @@ class ComputerChatBot(ChatBot):
         rules: Optional[list[str]] = None,
         llm_adapter: Optional[LLMAdapter] = None,
         toolkits: list[Toolkit] = None,
+        dimensions: Optional[tuple[int, int]] = None,
+        include_goto_tool: Optional[bool] = None,
+        starting_url: str | None = None,
     ):
         if rules is None:
-            rules = [
-                "if asked to go to a URL, you MUST use the goto function to go to the url if it is available",
-                "after going directly to a URL, the screen will change so you should take a look at it to know what to do next",
-            ]
+            rules = []
         super().__init__(
             name=name,
             title=title,
@@ -371,12 +414,19 @@ class ComputerChatBot(ChatBot):
         )
         self.operator: Optional[Operator] = None
         self.computer: Optional[Computer] = None
+        self.computer_dimensions: Optional[tuple[int, int]] = dimensions
+        self.include_goto_tool: Optional[bool] = include_goto_tool
+        self.starting_url: str | None = starting_url
 
     async def make_operator(self) -> Operator:
         return Operator()
 
     async def make_computer(self) -> Computer:
-        return ContainerPlaywrightComputer(room=self.room)
+        return ContainerPlaywrightComputer(
+            room=self.room,
+            dimensions=self.computer_dimensions,
+            starting_url=self.starting_url,
+        )
 
     async def get_thread_toolkits(
         self, *, thread_context: ChatThreadContext, participant: RemoteParticipant
@@ -397,9 +447,12 @@ class ComputerChatBot(ChatBot):
         computer_toolkit = ComputerToolkit(
             operator=self.operator,
             computer=self.computer,
+            dimensions=self.computer_dimensions,
             room=self.room,
             thread_path=thread_context.path,
             thread_adapter=thread_adapter,
+            include_goto_tool=self.include_goto_tool or False,
+            starting_url=self.starting_url,
         )
 
         return [computer_toolkit, *toolkits]

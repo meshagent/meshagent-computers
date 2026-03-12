@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,15 @@ from playwright.async_api import Error as PlaywrightError
 
 from meshagent.computers import container_playwright as container_playwright_module
 from meshagent.computers.container_playwright import ContainerPlaywrightComputer
+
+
+@pytest.fixture(autouse=True)
+def _clear_playwright_dimensions_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", raising=False)
+    monkeypatch.delenv(
+        "MESHAGENT_PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS",
+        raising=False,
+    )
 
 
 def test_playwright_version_falls_back_to_repo_module_and_warns(
@@ -67,6 +77,45 @@ def test_playwright_version_no_warning_when_fallback_module_is_missing(
     )
 
 
+def test_container_playwright_uses_supported_dimension_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", "1600x900")
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert computer.dimensions == (1600, 900)
+
+
+def test_container_playwright_falls_back_to_default_for_unsupported_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", "1024x768")
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert computer.dimensions == (1440, 900)
+
+
+def test_container_playwright_uses_connect_timeout_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS", "180")
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert computer.connect_timeout_seconds == 180.0
+
+
+def test_container_playwright_falls_back_to_default_for_invalid_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS", "invalid")
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert (
+        computer.connect_timeout_seconds
+        == container_playwright_module.PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS
+    )
+
+
 class _FakePage:
     def __init__(self) -> None:
         self.viewport_calls: list[dict[str, int]] = []
@@ -80,11 +129,24 @@ class _FakePage:
 
 
 class _FakeBrowser:
-    def __init__(self, *, page: _FakePage) -> None:
+    def __init__(
+        self,
+        *,
+        page: _FakePage | None = None,
+        new_page_factory=None,
+    ) -> None:
         self._page = page
+        self._new_page_factory = new_page_factory
+        self.close_calls = 0
 
     async def new_page(self) -> _FakePage:
+        if self._new_page_factory is not None:
+            return await self._new_page_factory()
+        assert self._page is not None
         return self._page
+
+    async def close(self) -> None:
+        self.close_calls += 1
 
 
 class _FakeChromium:
@@ -121,6 +183,38 @@ class _FakeRoom:
     def __init__(self) -> None:
         self.protocol = SimpleNamespace(token="token")
         self.containers = SimpleNamespace()
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_uses_custom_starting_url() -> None:
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(
+        room=room,
+        headless=True,
+        starting_url="https://example.com",
+    )
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    async def _base_url(*, container_id: str) -> str:
+        assert container_id == "container_1"
+        return "ws://127.0.0.1:62000/"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+    computer._base_url = _base_url  # type: ignore[method-assign]
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(responses=[browser])
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert page.viewport_calls == [{"width": 1440, "height": 900}]
+    assert page.goto_calls == ["https://example.com"]
 
 
 @pytest.mark.asyncio
@@ -186,7 +280,7 @@ async def test_container_playwright_retries_connect_on_port_forward_failure(
     assert len(forwarders) == 2
     assert forwarders[0].close_calls == 1
     assert forwarders[1].close_calls == 0
-    assert page.viewport_calls == [{"width": 1024, "height": 768}]
+    assert page.viewport_calls == [{"width": 1440, "height": 900}]
     assert page.goto_calls == ["https://google.com"]
 
 
@@ -237,9 +331,82 @@ async def test_container_playwright_retry_times_out_with_max_deadline(
     ):
         await computer._get_browser_and_page()
 
-    assert len(chromium.connect_calls) == 1
+    assert len(chromium.connect_calls) == 0
     assert len(forwarders) == 1
     assert forwarders[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_retries_when_page_setup_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MESHAGENT_SESSION_ID", raising=False)
+    monkeypatch.delenv("MESHAGENT_TUNNEL_PLAYWRIGHT", raising=False)
+
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    computer.connect_timeout_seconds = 5.0
+    computer.connect_attempt_timeout_seconds = 0.01
+    computer.connect_backoff_initial_seconds = 0.1
+    computer.connect_backoff_max_seconds = 0.5
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(container_playwright_module.asyncio, "sleep", _fake_sleep)
+
+    forwarders: list[_FakeForwarder] = []
+
+    async def _fake_port_forward(
+        *,
+        container_id: str,
+        port: int,
+        token: str,
+    ) -> _FakeForwarder:
+        assert container_id == "container_1"
+        assert port == 3000
+        assert token == "token"
+        forwarder = _FakeForwarder(host="127.0.0.1", port=63500 + len(forwarders))
+        forwarders.append(forwarder)
+        return forwarder
+
+    monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+
+    async def _hang_new_page() -> _FakePage:
+        await asyncio.Future()
+
+    stuck_browser = _FakeBrowser(new_page_factory=_hang_new_page)
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(
+        responses=[
+            stuck_browser,
+            browser,
+        ]
+    )
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert len(chromium.connect_calls) == 2
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:63500/"
+    assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:63501/"
+    assert sleep_calls == [0.1]
+    assert len(forwarders) == 2
+    assert forwarders[0].close_calls == 1
+    assert forwarders[1].close_calls == 0
+    assert stuck_browser.close_calls == 1
+    assert page.viewport_calls == [{"width": 1440, "height": 900}]
+    assert page.goto_calls == ["https://google.com"]
 
 
 @pytest.mark.asyncio

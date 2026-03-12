@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import logging
+import os
 import re
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version as package_version
@@ -16,9 +17,11 @@ from .base_playwright import BasePlaywrightComputer
 logger = logging.getLogger("computer_use")
 PLAYWRIGHT_CONTAINER_NAME = "playwright"
 PLAYWRIGHT_REMOTE_PORT = 3000
-PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS = 30.0
+PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS = 90.0
+PLAYWRIGHT_CONNECT_ATTEMPT_TIMEOUT_SECONDS = 10.0
 PLAYWRIGHT_CONNECT_BACKOFF_INITIAL_SECONDS = 0.25
 PLAYWRIGHT_CONNECT_BACKOFF_MAX_SECONDS = 4.0
+_PLAYWRIGHT_CONNECT_TIMEOUT_ENV_VAR = "MESHAGENT_PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS"
 
 
 def _playwright_version() -> str:
@@ -46,6 +49,22 @@ def _playwright_version() -> str:
     return f"{major}.{minor}.{patch}"
 
 
+def _resolve_playwright_connect_timeout_seconds() -> float:
+    raw_timeout = os.getenv(_PLAYWRIGHT_CONNECT_TIMEOUT_ENV_VAR)
+    if raw_timeout is None:
+        return PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS
+
+    try:
+        timeout = float(raw_timeout.strip())
+    except ValueError:
+        return PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS
+
+    if timeout <= 0:
+        return PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS
+
+    return timeout
+
+
 class ContainerPlaywrightComputer(BasePlaywrightComputer):
     """Launches a containerized Chromium instance using Playwright."""
 
@@ -56,8 +75,10 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         image: str | None = None,
         room: RoomClient,
         env: dict[str, str] | None = None,
+        dimensions: tuple[int, int] | None = None,
+        starting_url: str | None = None,
     ):
-        super().__init__()
+        super().__init__(dimensions=dimensions, starting_url=starting_url)
         self.headless = headless
         self.playwright_version = _playwright_version()
         self.image = image or "meshagent/playwright:default"
@@ -70,7 +91,10 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         self.room = room
         self.container_fut = None
         self._forwarder: LocalExposeHandle | None = None
-        self.connect_timeout_seconds = PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS
+        self.connect_timeout_seconds = _resolve_playwright_connect_timeout_seconds()
+        self.connect_attempt_timeout_seconds = (
+            PLAYWRIGHT_CONNECT_ATTEMPT_TIMEOUT_SECONDS
+        )
         self.connect_backoff_initial_seconds = (
             PLAYWRIGHT_CONNECT_BACKOFF_INITIAL_SECONDS
         )
@@ -141,6 +165,9 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
 
     @staticmethod
     def _is_retryable_connect_error(error: Exception) -> bool:
+        if isinstance(error, TimeoutError):
+            return True
+
         if isinstance(error, PlaywrightError):
             message = str(error).lower()
             return (
@@ -164,6 +191,26 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
             or "connection reset" in message
         )
 
+    async def _connect_browser_and_page_once(
+        self,
+        *,
+        base_url: str,
+        headers: dict[str, str],
+        width: int,
+        height: int,
+    ) -> tuple[Browser, Page]:
+        browser = await self._playwright.chromium.connect(base_url, headers=headers)
+        try:
+            page = await browser.new_page()
+            await page.set_viewport_size({"width": width, "height": height})
+            return browser, page
+        except asyncio.CancelledError:
+            await browser.close()
+            raise
+        except Exception:
+            await browser.close()
+            raise
+
     async def _get_browser_and_page(self) -> tuple[Browser, Page]:
         container_id = await self.ensure_container()
 
@@ -182,8 +229,26 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 logger.info(
                     "connecting to playwright (attempt %s): %s", attempt, base_url
                 )
-                browser = await self._playwright.chromium.connect(
-                    base_url, headers=headers
+                now = loop.time()
+                remaining_seconds = deadline - now
+                if remaining_seconds <= 0:
+                    await self._close_forwarder()
+                    raise TimeoutError(
+                        "timed out waiting for playwright websocket endpoint to become ready"
+                    )
+
+                attempt_timeout_seconds = min(
+                    self.connect_attempt_timeout_seconds,
+                    remaining_seconds,
+                )
+                browser, page = await asyncio.wait_for(
+                    self._connect_browser_and_page_once(
+                        base_url=base_url,
+                        headers=headers,
+                        width=width,
+                        height=height,
+                    ),
+                    timeout=attempt_timeout_seconds,
                 )
                 break
             except asyncio.CancelledError:
@@ -226,8 +291,6 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 )
                 attempt += 1
 
-        logger.info("starting a new browser page")
-        page = await browser.new_page()
-        await page.set_viewport_size({"width": width, "height": height})
-        await page.goto("https://google.com")
+        logger.info("playwright ready")
+        await page.goto(self.starting_url)
         return browser, page

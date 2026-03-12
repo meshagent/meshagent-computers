@@ -1,5 +1,6 @@
 import time
 import base64
+import os
 from typing import List, Dict, Literal
 from playwright.async_api import async_playwright, Browser, Page, Route, Request
 from meshagent.computers.utils import check_blocklisted_url
@@ -33,6 +34,51 @@ CUA_KEY_TO_PLAYWRIGHT_KEY = {
     "win": "Meta",
 }
 
+_DEFAULT_PLAYWRIGHT_DIMENSIONS = (1440, 900)
+_SUPPORTED_PLAYWRIGHT_DIMENSIONS = {
+    (1440, 900),
+    (1600, 900),
+}
+_PLAYWRIGHT_DIMENSIONS_ENV_VAR = "MESHAGENT_PLAYWRIGHT_DIMENSIONS"
+DEFAULT_PLAYWRIGHT_STARTING_URL = "https://google.com"
+
+
+def _parse_dimensions(raw_value: str) -> tuple[int, int] | None:
+    normalized = raw_value.strip().lower()
+    if normalized == "":
+        return None
+
+    if "x" in normalized:
+        parts = normalized.split("x", maxsplit=1)
+    elif "," in normalized:
+        parts = normalized.split(",", maxsplit=1)
+    else:
+        return None
+
+    try:
+        width = int(parts[0].strip())
+        height = int(parts[1].strip())
+    except ValueError:
+        return None
+
+    return (width, height)
+
+
+def _resolve_playwright_dimensions() -> tuple[int, int]:
+    raw_dimensions = os.getenv(_PLAYWRIGHT_DIMENSIONS_ENV_VAR)
+    if raw_dimensions is None:
+        return _DEFAULT_PLAYWRIGHT_DIMENSIONS
+
+    parsed = _parse_dimensions(raw_dimensions)
+    if parsed is None or parsed not in _SUPPORTED_PLAYWRIGHT_DIMENSIONS:
+        return _DEFAULT_PLAYWRIGHT_DIMENSIONS
+
+    return parsed
+
+
+def _is_supported_playwright_dimensions(dimensions: tuple[int, int]) -> bool:
+    return dimensions in _SUPPORTED_PLAYWRIGHT_DIMENSIONS
+
 
 class BasePlaywrightComputer:
     """
@@ -46,13 +92,30 @@ class BasePlaywrightComputer:
     """
 
     environment: Literal["browser"] = "browser"
-    dimensions = (1024, 768)
+    dimensions = _DEFAULT_PLAYWRIGHT_DIMENSIONS
 
-    def __init__(self):
+    def __init__(
+        self,
+        dimensions: tuple[int, int] | None = None,
+        starting_url: str | None = None,
+    ):
         self._context = None
         self._playwright = None
         self._browser: Browser | None = None
         self._page: Page | None = None
+        self.starting_url = (
+            starting_url
+            if isinstance(starting_url, str) and starting_url.strip() != ""
+            else DEFAULT_PLAYWRIGHT_STARTING_URL
+        )
+        if dimensions is None:
+            self.dimensions = _resolve_playwright_dimensions()
+        elif _is_supported_playwright_dimensions(dimensions):
+            self.dimensions = dimensions
+        else:
+            raise ValueError(
+                "playwright dimensions must be one of: (1440, 900), (1600, 900)"
+            )
 
     async def __aenter__(self):
         # Start Playwright and call the subclass hook for getting browser/page

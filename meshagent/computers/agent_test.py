@@ -3,7 +3,9 @@ from typing import Any
 import pytest
 
 from meshagent.agents.images_database import SavedImage
+from meshagent.computers import agent as agent_module
 from meshagent.computers.agent import ComputerToolkit
+from meshagent.computers.base_playwright import BasePlaywrightComputer
 from meshagent.tools import ToolContext
 
 
@@ -196,3 +198,237 @@ async def test_computer_tool_emits_startup_progress_events():
     assert outputs[0]["headline"] == "Starting browser automation session"
     assert outputs[1]["headline"] == "Browser automation session ready"
     assert outputs[0]["correlation_key"] == outputs[1]["correlation_key"]
+
+
+def test_computer_tool_uses_responses_computer_type():
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+    )
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+    definitions = computer_tool.get_open_ai_tool_definitions()
+    assert definitions == [{"type": "computer"}]
+
+
+def test_computer_tool_handles_computer_call_output_items():
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+    )
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+
+    handlers = computer_tool.get_open_ai_output_handlers()
+
+    assert handlers["computer_call"] == computer_tool.handle_computer_call
+
+
+def test_computer_toolkit_only_exposes_native_computer_tool_by_default():
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+    )
+
+    assert [tool.name for tool in toolkit.tools] == ["computer_call"]
+
+
+def test_computer_toolkit_rejects_goto_for_non_playwright_computers():
+    with pytest.raises(ValueError, match="goto tool requires a Playwright computer"):
+        ComputerToolkit(
+            computer=_FakeComputer(),
+            operator=_FakeOperator(),
+            room=_FakeRoom(name="agent"),
+            render_screen=None,
+            include_goto_tool=True,
+        )
+
+
+def test_computer_toolkit_can_include_goto_for_playwright_computers():
+    class _FakePlaywrightComputer(BasePlaywrightComputer):
+        async def _get_browser_and_page(self):
+            raise AssertionError("test should not start Playwright")
+
+    toolkit = ComputerToolkit(
+        computer=_FakePlaywrightComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+        render_screen=None,
+        include_goto_tool=True,
+    )
+
+    assert [tool.name for tool in toolkit.tools] == ["computer_call", "goto"]
+
+
+def test_computer_toolkit_passes_dimensions_to_container_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeContainerPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            room: _FakeRoom,
+            headless: bool,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
+            recorded["room"] = room
+            recorded["headless"] = headless
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(
+        agent_module,
+        "ContainerPlaywrightComputer",
+        _FakeContainerPlaywrightComputer,
+    )
+
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        room=room,
+        dimensions=(1600, 900),
+        render_screen=None,
+    )
+
+    assert recorded["room"] is room
+    assert recorded["headless"] is True
+    assert recorded["dimensions"] == (1600, 900)
+    assert recorded["starting_url"] is None
+    assert toolkit.computer.dimensions == (1600, 900)
+
+
+def test_computer_toolkit_passes_dimensions_to_local_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeLocalPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(
+        agent_module,
+        "LocalPlaywrightComputer",
+        _FakeLocalPlaywrightComputer,
+    )
+
+    toolkit = ComputerToolkit(
+        dimensions=(1600, 900),
+        render_screen=None,
+    )
+
+    assert recorded["dimensions"] == (1600, 900)
+    assert recorded["starting_url"] is None
+    assert toolkit.computer.dimensions == (1600, 900)
+
+
+def test_computer_toolkit_passes_starting_url_to_container_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeContainerPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            room: _FakeRoom,
+            headless: bool,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
+            recorded["room"] = room
+            recorded["headless"] = headless
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(
+        agent_module,
+        "ContainerPlaywrightComputer",
+        _FakeContainerPlaywrightComputer,
+    )
+
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        room=room,
+        starting_url="https://example.com",
+        render_screen=None,
+    )
+
+    assert recorded["room"] is room
+    assert recorded["headless"] is True
+    assert recorded["dimensions"] is None
+    assert recorded["starting_url"] == "https://example.com"
+    assert toolkit.computer.starting_url == "https://example.com"
+
+
+def test_computer_toolkit_passes_starting_url_to_local_computer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeLocalPlaywrightComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ):
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(
+        agent_module,
+        "LocalPlaywrightComputer",
+        _FakeLocalPlaywrightComputer,
+    )
+
+    toolkit = ComputerToolkit(
+        starting_url="https://example.com",
+        render_screen=None,
+    )
+
+    assert recorded["dimensions"] is None
+    assert recorded["starting_url"] == "https://example.com"
+    assert toolkit.computer.starting_url == "https://example.com"
+
+
+def test_computer_toolkit_rejects_starting_url_for_non_playwright_computers():
+    with pytest.raises(ValueError, match="starting_url requires a Playwright computer"):
+        ComputerToolkit(
+            computer=_FakeComputer(),
+            room=_FakeRoom(name="agent"),
+            starting_url="https://example.com",
+        )
+
+
+def test_computer_toolkit_rejects_unsupported_dimensions():
+    with pytest.raises(ValueError, match="dimensions must be one of"):
+        ComputerToolkit(dimensions=(1024, 768))
