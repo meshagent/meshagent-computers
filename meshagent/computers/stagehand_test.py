@@ -143,7 +143,7 @@ async def test_stagehand_computer_uses_room_runtime_for_local_stagehand(
     assert len(chromium.launch_calls) == 1
     launch_call = chromium.launch_calls[0]
     assert launch_call["headless"] is True
-    assert launch_call["chromium_sandbox"] is True
+    assert launch_call["chromium_sandbox"] is False
     assert any(
         isinstance(arg, str) and arg.startswith("--remote-debugging-port=")
         for arg in launch_call["args"]

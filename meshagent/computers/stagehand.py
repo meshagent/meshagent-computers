@@ -225,6 +225,7 @@ class StagehandComputerConfig:
     local_host: str = "127.0.0.1"
     local_port: int = 0
     local_headless: bool = True
+    local_chromium_sandbox: bool = False
     local_chrome_path: str | None = None
     local_ready_timeout_s: float = 30.0
     local_shutdown_on_close: bool = True
@@ -440,7 +441,7 @@ class StagehandComputer(BasePlaywrightComputer):
                 details=("Launching local browser.",),
             )
             launch_kwargs: dict[str, Any] = {
-                "chromium_sandbox": True,
+                "chromium_sandbox": self._stagehand_config.local_chromium_sandbox,
                 "headless": self._stagehand_config.local_headless,
                 "args": launch_args,
                 "env": {},
