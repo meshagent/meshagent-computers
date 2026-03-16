@@ -2,6 +2,8 @@ import subprocess
 import time
 import asyncio
 
+from .computer import ComputerContext
+
 
 async def _async_check_output(*args, **kwargs):
     proc = await asyncio.create_subprocess_exec(
@@ -31,7 +33,8 @@ class DockerComputer:
         self.display = display
         self.port_mapping = port_mapping
 
-    async def __aenter__(self):
+    async def __aenter__(self, context: ComputerContext):
+        del context
         # Check if the container is running
         result = subprocess.run(
             ["docker", "ps", "-q", "-f", f"name={self.container_name}"],
@@ -96,7 +99,8 @@ class DockerComputer:
             "utf-8", errors="ignore"
         )
 
-    async def screenshot(self) -> str:
+    async def screenshot(self, context: ComputerContext) -> str:
+        del context
         """
         Takes a screenshot with ImageMagick (import), returning base64-encoded PNG.
         Requires 'import'.
@@ -112,17 +116,35 @@ class DockerComputer:
 
         return await self._exec(cmd)
 
-    async def click(self, x: int, y: int, button: str = "left") -> None:
+    async def click(
+        self,
+        context: ComputerContext,
+        *,
+        x: int,
+        y: int,
+        button: str = "left",
+    ) -> None:
+        del context
         button_map = {"left": 1, "middle": 2, "right": 3}
         b = button_map.get(button, 1)
         await self._exec(f"DISPLAY={self.display} xdotool mousemove {x} {y} click {b}")
 
-    async def double_click(self, x: int, y: int) -> None:
+    async def double_click(self, context: ComputerContext, *, x: int, y: int) -> None:
+        del context
         await self._exec(
             f"DISPLAY={self.display} xdotool mousemove {x} {y} click --repeat 2 1"
         )
 
-    async def scroll(self, x: int, y: int, scroll_x: int, scroll_y: int) -> None:
+    async def scroll(
+        self,
+        context: ComputerContext,
+        *,
+        x: int,
+        y: int,
+        scroll_x: int,
+        scroll_y: int,
+    ) -> None:
+        del context
         """
         For simple vertical scrolling: xdotool click 4 (scroll up) or 5 (scroll down).
         """
@@ -132,7 +154,8 @@ class DockerComputer:
         for _ in range(clicks):
             await self._exec(f"DISPLAY={self.display} xdotool click {button}")
 
-    async def type(self, text: str) -> None:
+    async def type(self, context: ComputerContext, *, text: str) -> None:
+        del context
         """
         Type the given text via xdotool, preserving spaces and quotes.
         """
@@ -142,13 +165,16 @@ class DockerComputer:
         cmd = f"DISPLAY={self.display} xdotool type -- '{safe_text}'"
         await self._exec(cmd)
 
-    async def wait(self, ms: int = 1000) -> None:
+    async def wait(self, context: ComputerContext, *, ms: int = 1000) -> None:
+        del context
         time.sleep(ms / 1000)
 
-    async def move(self, x: int, y: int) -> None:
+    async def move(self, context: ComputerContext, *, x: int, y: int) -> None:
+        del context
         await self._exec(f"DISPLAY={self.display} xdotool mousemove {x} {y}")
 
-    async def keypress(self, keys: list[str]) -> None:
+    async def keypress(self, context: ComputerContext, *, keys: list[str]) -> None:
+        del context
         mapping = {
             "ENTER": "Return",
             "LEFT": "Left",
@@ -164,7 +190,13 @@ class DockerComputer:
         combo = "+".join(mapped_keys)
         await self._exec(f"DISPLAY={self.display} xdotool key {combo}")
 
-    async def drag(self, path: list[dict[str, int]]) -> None:
+    async def drag(
+        self,
+        context: ComputerContext,
+        *,
+        path: list[dict[str, int]],
+    ) -> None:
+        del context
         if not path:
             return
         start_x = path[0]["x"]
@@ -177,3 +209,20 @@ class DockerComputer:
                 f"DISPLAY={self.display} xdotool mousemove {point['x']} {point['y']}"
             )
         await self._exec(f"DISPLAY={self.display} xdotool mouseup 1")
+
+    async def get_current_url(self, context: ComputerContext) -> str:
+        del context
+        raise RuntimeError("get_current_url is not supported by DockerComputer")
+
+    async def goto(self, context: ComputerContext, *, url: str) -> None:
+        del url
+        del context
+        raise RuntimeError("goto is not supported by DockerComputer")
+
+    async def back(self, context: ComputerContext) -> None:
+        del context
+        raise RuntimeError("back is not supported by DockerComputer")
+
+    async def forward(self, context: ComputerContext) -> None:
+        del context
+        raise RuntimeError("forward is not supported by DockerComputer")

@@ -2,6 +2,7 @@ import os
 from typing import Tuple
 from playwright.async_api import Browser, Page, Error as PlaywrightError
 from .base_playwright import BasePlaywrightComputer
+from .computer import ComputerContext
 from browserbase import AsyncBrowserbase
 from dotenv import load_dotenv
 
@@ -48,7 +49,10 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
         self.virtual_mouse = virtual_mouse
         self.ad_blocker = ad_blocker
 
-    async def _get_browser_and_page(self) -> Tuple[Browser, Page]:
+    async def _get_browser_and_page(
+        self, context: ComputerContext
+    ) -> Tuple[Browser, Page]:
+        del context
         """
         Create a Browserbase session and connect to it.
 
@@ -171,8 +175,8 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
                 f"Session completed. View replay at https://browserbase.com/sessions/{self.session.id}"
             )
 
-    async def screenshot(self) -> str:
-        await self.ensure_page()
+    async def screenshot(self, context: ComputerContext) -> str:
+        await self.ensure_page(context)
 
         """
         Capture a screenshot of the current viewport using CDP.
@@ -194,4 +198,4 @@ class BrowserbaseBrowser(BasePlaywrightComputer):
             print(
                 f"CDP screenshot failed, falling back to standard screenshot: {error}"
             )
-            return await super().screenshot()
+            return await super().screenshot(context)

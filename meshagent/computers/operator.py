@@ -1,4 +1,6 @@
-from .computer import Computer
+from collections.abc import Awaitable, Callable
+
+from .computer import Computer, ComputerContext
 from .utils import check_blocklisted_url
 import json
 
@@ -28,14 +30,45 @@ class Operator:
 
         raise ValueError("computer_call is missing action data")
 
-    async def play(self, *, computer: Computer, item: dict) -> list:
+    @staticmethod
+    def _resolve_computer_method(
+        *, computer: Computer, action_type: str
+    ) -> Callable[..., Awaitable[object]]:
+        methods: dict[str, Callable[..., Awaitable[object]]] = {
+            "screenshot": computer.screenshot,
+            "click": computer.click,
+            "double_click": computer.double_click,
+            "scroll": computer.scroll,
+            "type": computer.type,
+            "wait": computer.wait,
+            "move": computer.move,
+            "keypress": computer.keypress,
+            "drag": computer.drag,
+            "get_current_url": computer.get_current_url,
+            "goto": computer.goto,
+            "back": computer.back,
+            "forward": computer.forward,
+        }
+        method = methods.get(action_type)
+        if method is None:
+            raise ValueError(f"unsupported computer action: {action_type}")
+        return method
+
+    async def play(
+        self,
+        context: ComputerContext,
+        *,
+        computer: Computer,
+        item: dict,
+    ) -> list:
         """Handle each item; may cause a computer action + screenshot."""
         if item["type"] == "function_call":
             name, args = item["name"], json.loads(item["arguments"])
-
-            if hasattr(computer, name):  # if function exists on computer, call it
-                method = getattr(computer, name)
-                await method(**args)
+            method = self._resolve_computer_method(
+                computer=computer,
+                action_type=name,
+            )
+            await method(context, **args)
             return [
                 {
                     "type": "function_call_output",
@@ -49,10 +82,13 @@ class Operator:
             for action in actions:
                 action_type = action["type"]
                 action_args = {k: v for k, v in action.items() if k != "type"}
-                method = getattr(computer, action_type)
-                await method(**action_args)
+                method = self._resolve_computer_method(
+                    computer=computer,
+                    action_type=action_type,
+                )
+                await method(context, **action_args)
 
-            screenshot_base64 = await computer.screenshot()
+            screenshot_base64 = await computer.screenshot(context)
             if self.show_images:
                 await self.show_image(screenshot_base64)
 
@@ -79,7 +115,7 @@ class Operator:
 
             # additional URL safety checks for browser environments
             if computer.environment == "browser":
-                current_url = await computer.get_current_url()
+                current_url = await computer.get_current_url(context)
                 check_blocklisted_url(current_url)
 
             return [call_output]

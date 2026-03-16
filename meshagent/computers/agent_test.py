@@ -1,11 +1,14 @@
+import asyncio
 from typing import Any
 
 import pytest
 
 from meshagent.agents.images_database import SavedImage
 from meshagent.computers import agent as agent_module
+from meshagent.computers import base_playwright as base_playwright_module
 from meshagent.computers.agent import ComputerToolkit
 from meshagent.computers.base_playwright import BasePlaywrightComputer
+from meshagent.computers.computer import ComputerContext
 from meshagent.tools import ToolContext
 
 
@@ -13,7 +16,11 @@ class _FakeComputer:
     environment = "browser"
     dimensions = (1024, 768)
 
-    async def __aenter__(self):
+    def __init__(self) -> None:
+        self.enter_contexts: list[ComputerContext] = []
+
+    async def __aenter__(self, context: ComputerContext):
+        self.enter_contexts.append(context)
         return self
 
     async def __aexit__(self, exc_type, exc, exc_tb):
@@ -71,9 +78,13 @@ class _FakeOperator:
         self.calls: list[dict[str, Any]] = []
 
     async def play(
-        self, *, computer: _FakeComputer, item: dict[str, Any]
+        self,
+        context: ComputerContext,
+        *,
+        computer: _FakeComputer,
+        item: dict[str, Any],
     ) -> list[dict]:
-        self.calls.append({"computer": computer, "item": item})
+        self.calls.append({"computer": computer, "item": item, "context": context})
         return [{"type": "computer_call_output", "output": None}]
 
 
@@ -168,36 +179,189 @@ async def test_default_render_screen_skips_without_thread_context():
 
 @pytest.mark.asyncio
 async def test_computer_tool_emits_startup_progress_events():
+    computer = _FakeComputer()
     operator = _FakeOperator()
     room = _FakeRoom(name="agent")
     toolkit = ComputerToolkit(
-        computer=_FakeComputer(),
+        computer=computer,
         operator=operator,
         room=room,
         render_screen=None,
     )
-    context = ToolContext(room=room, caller=room.local_participant)
+    events: list[dict[str, Any]] = []
+    context = ToolContext(
+        room=room,
+        caller=room.local_participant,
+        event_handler=events.append,
+    )
 
     computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
-    stream = await computer_tool.handle_computer_call(
+    result = await computer_tool.handle_computer_call(
         context=context,
         type="computer_call",
         action={"type": "wait"},
     )
-    outputs: list[dict[str, Any]] = []
-    async for item in stream:
-        outputs.append(item)
 
-    assert len(outputs) == 3
-    assert outputs[0]["type"] == "agent.event"
-    assert outputs[0]["state"] == "in_progress"
-    assert outputs[1]["type"] == "agent.event"
-    assert outputs[1]["state"] == "completed"
-    assert outputs[2]["type"] == "computer_call_output"
+    assert result == {"type": "computer_call_output", "output": None}
+    assert len(events) == 2
+    assert events[0]["type"] == "agent.event"
+    assert events[0]["state"] == "in_progress"
+    assert events[1]["type"] == "agent.event"
+    assert events[1]["state"] == "completed"
     assert len(operator.calls) == 1
-    assert outputs[0]["headline"] == "Starting computer..."
-    assert outputs[1]["headline"] == "Computer ready"
-    assert outputs[0]["correlation_key"] == outputs[1]["correlation_key"]
+    assert operator.calls[0]["context"] is computer.enter_contexts[0]
+    assert events[0]["headline"] == "Starting computer..."
+    assert events[1]["headline"] == "Computer ready"
+    assert events[0]["correlation_key"] == events[1]["correlation_key"]
+
+
+@pytest.mark.asyncio
+async def test_computer_tool_propagates_computer_startup_events_via_tool_context():
+    class _StartupEmittingComputer(_FakeComputer):
+        async def __aenter__(
+            self,
+            context: ComputerContext,
+        ):
+            self.enter_contexts.append(context)
+            context.emit_startup(
+                state="in_progress",
+                details=("Waiting for Playwright container to become ready.",),
+            )
+            return self
+
+    computer = _StartupEmittingComputer()
+    operator = _FakeOperator()
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        computer=computer,
+        operator=operator,
+        room=room,
+        render_screen=None,
+    )
+    events: list[dict[str, Any]] = []
+    context = ToolContext(
+        room=room,
+        caller=room.local_participant,
+        event_handler=events.append,
+    )
+
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+    await computer_tool.handle_computer_call(
+        context=context,
+        type="computer_call",
+        action={"type": "wait"},
+    )
+
+    assert len(events) == 3
+    assert events[0]["state"] == "in_progress"
+    assert events[0]["details"] == []
+    assert events[1]["state"] == "in_progress"
+    assert events[1]["details"] == ["Waiting for Playwright container to become ready."]
+    assert events[2]["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_restart_playwright_client_does_not_block_on_stuck_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TestComputer(BasePlaywrightComputer):
+        async def _get_browser_and_page(
+            self,
+            context: ComputerContext,
+        ):
+            del context
+            raise AssertionError("not used in this test")
+
+    class _StuckBrowser:
+        def __init__(self) -> None:
+            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+            self.task: asyncio.Task[object] | None = None
+
+        async def close(self) -> None:
+            self.task = asyncio.current_task()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                await self.release.wait()
+                raise
+
+    class _StuckContextManager:
+        def __init__(self) -> None:
+            self.cancelled = asyncio.Event()
+            self.release = asyncio.Event()
+            self.task: asyncio.Task[object] | None = None
+
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, exc_type, exc, exc_tb) -> None:
+            del exc_type
+            del exc
+            del exc_tb
+            self.task = asyncio.current_task()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                await self.release.wait()
+                raise
+
+    class _ReplacementContextManager:
+        def __init__(self) -> None:
+            self.enter_calls = 0
+
+        async def __aenter__(self) -> object:
+            self.enter_calls += 1
+            return object()
+
+        async def __aexit__(self, exc_type, exc, exc_tb) -> None:
+            del exc_type
+            del exc
+            del exc_tb
+
+    replacement_context = _ReplacementContextManager()
+    monkeypatch.setattr(
+        base_playwright_module,
+        "_PLAYWRIGHT_CONTEXT_RESTART_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        base_playwright_module,
+        "async_playwright",
+        lambda: replacement_context,
+    )
+
+    computer = _TestComputer()
+    old_browser = _StuckBrowser()
+    old_context = _StuckContextManager()
+    computer._browser = old_browser  # type: ignore[assignment]
+    computer._context = old_context  # type: ignore[assignment]
+    computer._playwright = object()
+
+    await computer.restart_playwright_client()
+
+    assert old_browser.cancelled.is_set()
+    assert old_context.cancelled.is_set()
+    assert replacement_context.enter_calls == 1
+    assert computer._browser is None
+    assert computer._page is None
+    assert computer._context is replacement_context
+    assert computer._playwright is not None
+
+    old_browser.release.set()
+    old_context.release.set()
+    if old_browser.task is not None:
+        await asyncio.wait_for(
+            asyncio.gather(old_browser.task, return_exceptions=True),
+            timeout=1.0,
+        )
+    if old_context.task is not None:
+        await asyncio.wait_for(
+            asyncio.gather(old_context.task, return_exceptions=True),
+            timeout=1.0,
+        )
 
 
 def test_computer_tool_uses_responses_computer_type():
@@ -250,7 +414,11 @@ def test_computer_toolkit_rejects_goto_for_non_playwright_computers():
 
 def test_computer_toolkit_can_include_goto_for_playwright_computers():
     class _FakePlaywrightComputer(BasePlaywrightComputer):
-        async def _get_browser_and_page(self):
+        async def _get_browser_and_page(
+            self,
+            context: ComputerContext,
+        ):
+            del context
             raise AssertionError("test should not start Playwright")
 
     toolkit = ComputerToolkit(
@@ -268,6 +436,7 @@ def test_computer_toolkit_passes_dimensions_to_container_computer(
     monkeypatch: pytest.MonkeyPatch,
 ):
     recorded: dict[str, Any] = {}
+    monkeypatch.setattr(agent_module, "stagehand_available", lambda: False)
 
     class _FakeContainerPlaywrightComputer:
         environment = "browser"
@@ -311,6 +480,7 @@ def test_computer_toolkit_passes_dimensions_to_local_computer(
     monkeypatch: pytest.MonkeyPatch,
 ):
     recorded: dict[str, Any] = {}
+    monkeypatch.setattr(agent_module, "stagehand_available", lambda: False)
 
     class _FakeLocalPlaywrightComputer:
         environment = "browser"
@@ -346,6 +516,7 @@ def test_computer_toolkit_passes_starting_url_to_container_computer(
     monkeypatch: pytest.MonkeyPatch,
 ):
     recorded: dict[str, Any] = {}
+    monkeypatch.setattr(agent_module, "stagehand_available", lambda: False)
 
     class _FakeContainerPlaywrightComputer:
         environment = "browser"
@@ -389,6 +560,7 @@ def test_computer_toolkit_passes_starting_url_to_local_computer(
     monkeypatch: pytest.MonkeyPatch,
 ):
     recorded: dict[str, Any] = {}
+    monkeypatch.setattr(agent_module, "stagehand_available", lambda: False)
 
     class _FakeLocalPlaywrightComputer:
         environment = "browser"
@@ -432,3 +604,73 @@ def test_computer_toolkit_rejects_starting_url_for_non_playwright_computers():
 def test_computer_toolkit_rejects_unsupported_dimensions():
     with pytest.raises(ValueError, match="dimensions must be one of"):
         ComputerToolkit(dimensions=(1024, 768))
+
+
+def test_computer_toolkit_prefers_stagehand_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeStagehandComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ) -> None:
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+            self.dimensions = dimensions or (1440, 900)
+            self.starting_url = starting_url or "https://google.com"
+
+    monkeypatch.setattr(agent_module, "stagehand_available", lambda: True)
+    monkeypatch.setattr(agent_module, "StagehandComputer", _FakeStagehandComputer)
+
+    toolkit = ComputerToolkit(
+        room=_FakeRoom(name="agent"),
+        dimensions=(1600, 900),
+        starting_url="https://example.com",
+        render_screen=None,
+    )
+
+    assert recorded["dimensions"] == (1600, 900)
+    assert recorded["starting_url"] == "https://example.com"
+    assert toolkit.computer.starting_url == "https://example.com"
+    assert toolkit.computer.dimensions == (1600, 900)
+
+
+@pytest.mark.asyncio
+async def test_computer_chatbot_make_computer_prefers_stagehand_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    recorded: dict[str, Any] = {}
+
+    class _FakeStagehandComputer:
+        environment = "browser"
+
+        def __init__(
+            self,
+            *,
+            dimensions: tuple[int, int] | None = None,
+            starting_url: str | None = None,
+        ) -> None:
+            recorded["dimensions"] = dimensions
+            recorded["starting_url"] = starting_url
+
+    monkeypatch.setattr(agent_module, "stagehand_available", lambda: True)
+    monkeypatch.setattr(agent_module, "StagehandComputer", _FakeStagehandComputer)
+
+    bot = agent_module.ComputerChatBot(
+        name="computer",
+        dimensions=(1600, 900),
+        starting_url="https://example.com",
+    )
+    bot._room = _FakeRoom(name="agent")
+
+    computer = await bot.make_computer()
+
+    assert isinstance(computer, _FakeStagehandComputer)
+    assert recorded["dimensions"] == (1600, 900)
+    assert recorded["starting_url"] == "https://example.com"

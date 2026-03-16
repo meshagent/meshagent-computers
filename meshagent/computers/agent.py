@@ -3,23 +3,24 @@ import base64
 import inspect
 import logging
 import uuid
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from collections.abc import Sequence
+from typing import Any, Awaitable, Callable, Optional
 
 from meshagent.agents import LLMAdapter
 from meshagent.agents.images_database import ImagesDatabase
 from meshagent.agents.thread_adapter import ThreadAdapter
 from meshagent.tools import FunctionTool, Toolkit, ToolContext
-from meshagent.computers import (
-    Computer,
-    Operator,
-    ContainerPlaywrightComputer,
-    LocalPlaywrightComputer,
-)
-from meshagent.computers.base_playwright import BasePlaywrightComputer
 from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 from meshagent.api import RoomClient
+
+from .base_playwright import BasePlaywrightComputer
+from .computer import Computer, ComputerContext, ComputerStartupState
+from .container_playwright import ContainerPlaywrightComputer
+from .local_playwright import LocalPlaywrightComputer
+from .operator import Operator
+from .stagehand import StagehandComputer, stagehand_available
 
 logger = logging.getLogger("computer")
 logger.setLevel(logging.WARN)
@@ -73,45 +74,36 @@ class ComputerTool(OpenAIResponsesTool):
         return {"computer_call": self.handle_computer_call}
 
     async def handle_computer_call(self, context: ToolContext, **arguments):
-        async def run() -> AsyncIterator[dict[str, Any]]:
-            emit_startup_status = not self.toolkit.started
-            if emit_startup_status:
-                yield self.toolkit.make_startup_event(state="in_progress")
+        computer_context = self.toolkit.make_computer_context(tool_context=context)
+        await self.toolkit.ensure_started_with_events(context=computer_context)
 
-            try:
-                await self.toolkit.ensure_started()
-            except Exception:
-                if emit_startup_status:
-                    yield self.toolkit.make_startup_event(state="failed")
-                raise
+        logger.info("handling computer")
+        outputs = await self.operator.play(
+            computer_context,
+            computer=self.computer,
+            item=arguments,
+        )
+        if self.render_screen is not None:
+            for output in outputs:
+                if output["type"] == "computer_call_output":
+                    if output["output"] is not None:
+                        output_type = output["output"].get("type")
+                        if output_type in {"input_image", "computer_screenshot"}:
+                            b64: str = output["output"]["image_url"]
+                            image_data_b64 = b64.split(",", 1)
 
-            if emit_startup_status:
-                yield self.toolkit.make_startup_event(state="completed")
+                            image_bytes = base64.b64decode(image_data_b64[1])
+                            render_result = self.render_screen(image_bytes)
+                            if inspect.isawaitable(render_result):
+                                await render_result
 
-            logger.info("handling computer")
-            outputs = await self.operator.play(computer=self.computer, item=arguments)
-            if self.render_screen is not None:
-                for output in outputs:
-                    if output["type"] == "computer_call_output":
-                        if output["output"] is not None:
-                            output_type = output["output"].get("type")
-                            if output_type in {"input_image", "computer_screenshot"}:
-                                b64: str = output["output"]["image_url"]
-                                image_data_b64 = b64.split(",", 1)
-
-                                image_bytes = base64.b64decode(image_data_b64[1])
-                                render_result = self.render_screen(image_bytes)
-                                if inspect.isawaitable(render_result):
-                                    await render_result
-
-            yield outputs[0]
-
-        return run()
+        return outputs[0]
 
 
 class ScreenshotTool(FunctionTool):
-    def __init__(self, computer: Computer):
+    def __init__(self, computer: Computer, toolkit: "ComputerToolkit"):
         self.computer = computer
+        self.toolkit = toolkit
 
         super().__init__(
             name="screenshot",
@@ -132,7 +124,12 @@ class ScreenshotTool(FunctionTool):
         )
 
     async def execute(self, context: ToolContext, save_path: str, full_page: bool):
-        screenshot_bytes = await self.computer.screenshot_bytes(full_page=full_page)
+        computer_context = self.toolkit.make_computer_context(tool_context=context)
+        await self.toolkit.ensure_started_with_events(context=computer_context)
+        screenshot_bytes = await self.computer.screenshot_bytes(
+            computer_context,
+            full_page=full_page,
+        )
         await context.room.storage.upload(
             path=save_path,
             data=screenshot_bytes,
@@ -171,16 +168,20 @@ class GotoURL(FunctionTool):
         )
 
     async def execute(self, context: ToolContext, url: str):
-        await self.toolkit.ensure_started()
+        computer_context = self.toolkit.make_computer_context(tool_context=context)
+        await self.toolkit.ensure_started_with_events(context=computer_context)
 
         if not url.startswith("https://") and not url.startswith("http://"):
             url = "https://" + url
 
-        await self.computer.goto(url)
+        await self.computer.goto(computer_context, url=url)
 
         if self.render_screen is not None:
             render_result = self.render_screen(
-                await self.computer.screenshot_bytes(full_page=False)
+                await self.computer.screenshot_bytes(
+                    computer_context,
+                    full_page=False,
+                )
             )
             if inspect.isawaitable(render_result):
                 await render_result
@@ -209,14 +210,18 @@ class ComputerToolkit(Toolkit):
             operator = Operator()
 
         if computer is None:
-            if room is not None:
+            if stagehand_available():
+                computer = StagehandComputer(
+                    dimensions=dimensions,
+                    starting_url=starting_url,
+                )
+            elif room is not None:
                 computer = ContainerPlaywrightComputer(
                     room=room,
                     headless=True,
                     dimensions=dimensions,
                     starting_url=starting_url,
                 )
-
             else:
                 computer = LocalPlaywrightComputer(
                     dimensions=dimensions,
@@ -324,7 +329,7 @@ class ComputerToolkit(Toolkit):
             logger.error("failed to attach computer screenshot to thread", exc_info=ex)
 
     async def __aenter__(self):
-        await self.ensure_started()
+        await self.ensure_started(context=self.make_bootstrap_computer_context())
         return self
 
     def _startup_event_key(self) -> str:
@@ -337,7 +342,12 @@ class ComputerToolkit(Toolkit):
             "Failed to start computer",
         )
 
-    def make_startup_event(self, *, state: str) -> dict[str, Any]:
+    def make_startup_event(
+        self,
+        *,
+        state: ComputerStartupState,
+        details: Sequence[str] = (),
+    ) -> dict[str, Any]:
         starting, ready, failed = self._startup_headlines()
         if state == "completed":
             headline = ready
@@ -356,10 +366,37 @@ class ComputerToolkit(Toolkit):
             "correlation_key": self._startup_event_key(),
             "summary": headline,
             "headline": headline,
-            "details": [],
+            "details": list(details),
         }
 
-    async def ensure_started(self):
+    def make_computer_context(self, *, tool_context: ToolContext) -> ComputerContext:
+        return ComputerContext(
+            room=tool_context.room,
+            caller=tool_context.caller,
+            on_behalf_of=tool_context.on_behalf_of,
+            caller_context=tool_context.caller_context,
+            event_handler=tool_context.emit,
+            startup_event_factory=lambda state, details: self.make_startup_event(
+                state=state,
+                details=details,
+            ),
+        )
+
+    def make_bootstrap_computer_context(self) -> ComputerContext:
+        if self.room is None:
+            raise RuntimeError(
+                "ComputerToolkit startup requires a room-backed ComputerContext"
+            )
+        return ComputerContext(
+            room=self.room,
+            caller=self.room.local_participant,
+            startup_event_factory=lambda state, details: self.make_startup_event(
+                state=state,
+                details=details,
+            ),
+        )
+
+    async def ensure_started(self, *, context: ComputerContext) -> bool:
         if self.started:
             return False
 
@@ -367,9 +404,33 @@ class ComputerToolkit(Toolkit):
             if self.started:
                 return False
 
-            await self.computer.__aenter__()
+            await self.computer.__aenter__(context)
             self.started = True
             return True
+
+    async def ensure_started_with_events(
+        self,
+        *,
+        context: ComputerContext,
+    ) -> bool:
+        emit_startup_status = not self.started
+        if emit_startup_status:
+            context.emit_startup(state="in_progress")
+
+        try:
+            started = await self.ensure_started(context=context)
+        except Exception:
+            if emit_startup_status and context.last_startup_state not in {
+                "failed",
+                "cancelled",
+            }:
+                context.emit_startup(state="failed")
+            raise
+
+        if emit_startup_status and context.last_startup_state != "completed":
+            context.emit_startup(state="completed")
+
+        return started
 
     async def __aexit__(self):
         if self.started:
@@ -415,6 +476,12 @@ class ComputerChatBot(ChatBot):
         return Operator()
 
     async def make_computer(self) -> Computer:
+        if stagehand_available():
+            return StagehandComputer(
+                dimensions=self.computer_dimensions,
+                starting_url=self.starting_url,
+            )
+
         return ContainerPlaywrightComputer(
             room=self.room,
             dimensions=self.computer_dimensions,

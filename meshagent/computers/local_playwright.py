@@ -1,5 +1,6 @@
 from playwright.async_api import Browser, Page
 from .base_playwright import BasePlaywrightComputer
+from .computer import ComputerContext
 
 
 class LocalPlaywrightComputer(BasePlaywrightComputer):
@@ -14,7 +15,10 @@ class LocalPlaywrightComputer(BasePlaywrightComputer):
         super().__init__(dimensions=dimensions, starting_url=starting_url)
         self.headless = headless
 
-    async def _get_browser_and_page(self) -> tuple[Browser, Page]:
+    async def _get_browser_and_page(
+        self, context: ComputerContext
+    ) -> tuple[Browser, Page]:
+        del context
         width, height = self.dimensions
         launch_args = [
             f"--window-size={width},{height}",
