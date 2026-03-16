@@ -331,17 +331,10 @@ class ComputerToolkit(Toolkit):
         return f"{self.name}:startup"
 
     def _startup_headlines(self) -> tuple[str, str, str]:
-        if isinstance(self.computer, ContainerPlaywrightComputer):
-            return (
-                "Starting Playwright container",
-                "Playwright container ready",
-                "Failed to start Playwright container",
-            )
-
         return (
-            "Starting browser automation session",
-            "Browser automation session ready",
-            "Failed to start browser automation session",
+            "Starting computer...",
+            "Computer ready",
+            "Failed to start computer",
         )
 
     def make_startup_event(self, *, state: str) -> dict[str, Any]:

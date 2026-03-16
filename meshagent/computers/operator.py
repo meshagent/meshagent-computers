@@ -71,7 +71,6 @@ class Operator:
             call_output = {
                 "type": "computer_call_output",
                 "call_id": item["call_id"],
-                "acknowledged_safety_checks": pending_checks,
                 "output": {
                     "type": "computer_screenshot",
                     "image_url": f"data:image/png;base64,{screenshot_base64}",

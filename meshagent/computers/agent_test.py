@@ -195,8 +195,8 @@ async def test_computer_tool_emits_startup_progress_events():
     assert outputs[1]["state"] == "completed"
     assert outputs[2]["type"] == "computer_call_output"
     assert len(operator.calls) == 1
-    assert outputs[0]["headline"] == "Starting browser automation session"
-    assert outputs[1]["headline"] == "Browser automation session ready"
+    assert outputs[0]["headline"] == "Starting computer..."
+    assert outputs[1]["headline"] == "Computer ready"
     assert outputs[0]["correlation_key"] == outputs[1]["correlation_key"]
 
 

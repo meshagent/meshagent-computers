@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import time
 import base64
 import os
@@ -41,6 +43,7 @@ _SUPPORTED_PLAYWRIGHT_DIMENSIONS = {
 }
 _PLAYWRIGHT_DIMENSIONS_ENV_VAR = "MESHAGENT_PLAYWRIGHT_DIMENSIONS"
 DEFAULT_PLAYWRIGHT_STARTING_URL = "https://google.com"
+_PLAYWRIGHT_CONTEXT_RESTART_TIMEOUT_SECONDS = 5.0
 
 
 def _parse_dimensions(raw_value: str) -> tuple[int, int] | None:
@@ -153,6 +156,32 @@ class BasePlaywrightComputer:
         self._playwright = None
         self._browser = None
         self._page = None
+
+    async def restart_playwright_client(self) -> None:
+        old_browser = self._browser
+        old_context = self._context
+
+        self._browser = None
+        self._page = None
+        self._playwright = None
+        self._context = None
+
+        if old_browser is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    old_browser.close(),
+                    timeout=_PLAYWRIGHT_CONTEXT_RESTART_TIMEOUT_SECONDS,
+                )
+
+        if old_context is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    old_context.__aexit__(None, None, None),
+                    timeout=_PLAYWRIGHT_CONTEXT_RESTART_TIMEOUT_SECONDS,
+                )
+
+        self._context = async_playwright()
+        self._playwright = await self._context.__aenter__()
 
     async def ensure_page(self):
         # After a timeout, we might loose our browser

@@ -1,10 +1,10 @@
 import asyncio
+import contextlib
 import errno
+import json
 import logging
 import os
-import re
-from importlib import import_module
-from importlib.metadata import PackageNotFoundError, version as package_version
+from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import Browser, Error as PlaywrightError, Page
 
@@ -22,31 +22,6 @@ PLAYWRIGHT_CONNECT_ATTEMPT_TIMEOUT_SECONDS = 10.0
 PLAYWRIGHT_CONNECT_BACKOFF_INITIAL_SECONDS = 0.25
 PLAYWRIGHT_CONNECT_BACKOFF_MAX_SECONDS = 4.0
 _PLAYWRIGHT_CONNECT_TIMEOUT_ENV_VAR = "MESHAGENT_PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS"
-
-
-def _playwright_version() -> str:
-    try:
-        raw_version = package_version("playwright")
-    except PackageNotFoundError:
-        try:
-            repo_version_module = import_module("playwright._repo_version")
-            raw_version = repo_version_module.version
-        except Exception as exc:
-            raise RuntimeError("playwright is not installed") from exc
-        logger.warning(
-            "playwright package metadata is unavailable; "
-            "using playwright._repo_version.version fallback"
-        )
-
-    if not isinstance(raw_version, str):
-        raise RuntimeError("playwright is not installed")
-
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", raw_version)
-    if match is None:
-        raise RuntimeError(f"unsupported playwright version format: {raw_version!r}")
-
-    major, minor, patch = match.groups()
-    return f"{major}.{minor}.{patch}"
 
 
 def _resolve_playwright_connect_timeout_seconds() -> float:
@@ -80,13 +55,11 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
     ):
         super().__init__(dimensions=dimensions, starting_url=starting_url)
         self.headless = headless
-        self.playwright_version = _playwright_version()
         self.image = image or "meshagent/playwright:default"
         self.container_name = PLAYWRIGHT_CONTAINER_NAME
         self.container_command = (
-            '/bin/sh -c "npx -y playwright'
-            f"@{self.playwright_version}"
-            f' run-server --port {PLAYWRIGHT_REMOTE_PORT} --host 0.0.0.0"'
+            "/bin/sh -c "
+            f'"playwright run-server --port {PLAYWRIGHT_REMOTE_PORT} --host 0.0.0.0"'
         )
         self.room = room
         self.container_fut = None
@@ -168,10 +141,15 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         if isinstance(error, TimeoutError):
             return True
 
+        if isinstance(error, ConnectionError):
+            return True
+
         if isinstance(error, PlaywrightError):
             message = str(error).lower()
             return (
-                "econnrefused" in message
+                "timed out" in message
+                or "timeout" in message
+                or "econnrefused" in message
                 or "connection refused" in message
                 or "socket hang up" in message
                 or "econnreset" in message
@@ -184,12 +162,94 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
 
         message = str(error).lower()
         return (
-            "econnrefused" in message
+            "timed out" in message
+            or "timeout" in message
+            or "econnrefused" in message
             or "connection refused" in message
             or "socket hang up" in message
             or "econnreset" in message
             or "connection reset" in message
         )
+
+    async def _reset_after_connect_failure(self) -> None:
+        await self._close_forwarder()
+        await self.restart_playwright_client()
+
+    @staticmethod
+    def _health_check_target(*, base_url: str) -> tuple[str, int, str]:
+        parsed = urlsplit(base_url)
+        if parsed.hostname is None or parsed.port is None:
+            raise ValueError(f"invalid playwright base url: {base_url!r}")
+        path = "/json"
+        return parsed.hostname, parsed.port, path
+
+    @staticmethod
+    def _health_check_url(*, base_url: str) -> str:
+        parsed = urlsplit(base_url)
+        return urlunsplit(("http", parsed.netloc, "/json", "", ""))
+
+    @staticmethod
+    def _ws_endpoint_url(*, base_url: str, ws_endpoint_path: str | None) -> str:
+        parsed = urlsplit(base_url)
+        path = ws_endpoint_path or parsed.path or "/"
+        return urlunsplit(("ws", parsed.netloc, path, "", ""))
+
+    async def _check_server_ready_once(
+        self,
+        *,
+        base_url: str,
+        timeout_seconds: float,
+    ) -> str:
+        host, port, path = self._health_check_target(base_url=base_url)
+
+        async def _probe() -> str:
+            reader, writer = await asyncio.open_connection(host=host, port=port)
+            try:
+                request = (
+                    f"GET {path} HTTP/1.1\r\n"
+                    f"Host: {host}:{port}\r\n"
+                    "Connection: close\r\n\r\n"
+                )
+                writer.write(request.encode("ascii"))
+                await writer.drain()
+                status_line = await reader.readline()
+                if not status_line:
+                    raise ConnectionError("playwright container is still starting")
+                if status_line.startswith(b"HTTP/"):
+                    parts = status_line.split(maxsplit=2)
+                    if len(parts) >= 2:
+                        try:
+                            status_code = int(parts[1])
+                        except ValueError:
+                            status_code = None
+                        if status_code is not None and status_code >= 500:
+                            raise ConnectionError(
+                                f"playwright health check returned HTTP {status_code}"
+                            )
+                while True:
+                    line = await reader.readline()
+                    if line in (b"", b"\r\n", b"\n"):
+                        break
+                body = await reader.read()
+                try:
+                    payload = json.loads(body.decode("utf-8"))
+                except Exception:
+                    payload = {}
+                ws_endpoint_path = payload.get("wsEndpointPath")
+                if ws_endpoint_path is not None and not isinstance(
+                    ws_endpoint_path, str
+                ):
+                    ws_endpoint_path = None
+                return self._ws_endpoint_url(
+                    base_url=base_url,
+                    ws_endpoint_path=ws_endpoint_path,
+                )
+            finally:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+
+        return await asyncio.wait_for(_probe(), timeout=timeout_seconds)
 
     async def _connect_browser_and_page_once(
         self,
@@ -198,10 +258,18 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         headers: dict[str, str],
         width: int,
         height: int,
+        timeout_seconds: float,
     ) -> tuple[Browser, Page]:
-        browser = await self._playwright.chromium.connect(base_url, headers=headers)
+        browser = await self._playwright.chromium.connect(
+            base_url,
+            headers=headers,
+            timeout=timeout_seconds * 1000,
+        )
         try:
-            page = await browser.new_page()
+            page = await asyncio.wait_for(
+                browser.new_page(),
+                timeout=timeout_seconds,
+            )
             await page.set_viewport_size({"width": width, "height": height})
             return browser, page
         except asyncio.CancelledError:
@@ -221,75 +289,121 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         backoff_seconds = self.connect_backoff_initial_seconds
         attempt = 1
 
-        while True:
-            try:
-                base_url = await self._base_url(
-                    container_id=container_id,
-                )
-                logger.info(
-                    "connecting to playwright (attempt %s): %s", attempt, base_url
-                )
-                now = loop.time()
-                remaining_seconds = deadline - now
-                if remaining_seconds <= 0:
-                    await self._close_forwarder()
-                    raise TimeoutError(
-                        "timed out waiting for playwright websocket endpoint to become ready"
+        try:
+            while True:
+                try:
+                    base_url = await self._base_url(
+                        container_id=container_id,
                     )
+                    now = loop.time()
+                    remaining_seconds = deadline - now
+                    if remaining_seconds <= 0:
+                        raise TimeoutError(
+                            "timed out waiting for playwright websocket endpoint to become ready"
+                        )
 
-                attempt_timeout_seconds = min(
-                    self.connect_attempt_timeout_seconds,
-                    remaining_seconds,
-                )
-                browser, page = await asyncio.wait_for(
-                    self._connect_browser_and_page_once(
+                    attempt_timeout_seconds = min(
+                        self.connect_attempt_timeout_seconds,
+                        remaining_seconds,
+                    )
+                    logger.info(
+                        "checking playwright endpoint (attempt %s): %s",
+                        attempt,
+                        self._health_check_url(base_url=base_url),
+                    )
+                    ws_endpoint_url = await self._check_server_ready_once(
                         base_url=base_url,
+                        timeout_seconds=attempt_timeout_seconds,
+                    )
+                    remaining_seconds = deadline - loop.time()
+                    if remaining_seconds <= 0:
+                        raise TimeoutError(
+                            "timed out waiting for playwright websocket endpoint to become ready"
+                        )
+                    attempt_timeout_seconds = min(
+                        self.connect_attempt_timeout_seconds,
+                        remaining_seconds,
+                    )
+                    logger.info(
+                        "connecting to playwright websocket (attempt %s): %s",
+                        attempt,
+                        ws_endpoint_url,
+                    )
+                    browser, page = await self._connect_browser_and_page_once(
+                        base_url=ws_endpoint_url,
                         headers=headers,
                         width=width,
                         height=height,
-                    ),
-                    timeout=attempt_timeout_seconds,
-                )
-                break
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                if self._is_version_mismatch_error(error):
+                        timeout_seconds=attempt_timeout_seconds,
+                    )
+                    break
+                except asyncio.CancelledError:
                     raise
+                except Exception as error:
+                    if self._is_version_mismatch_error(error):
+                        raise
 
-                should_retry = self._is_retryable_connect_error(error)
-                if not should_retry:
-                    raise
+                    should_retry = self._is_retryable_connect_error(error)
+                    if not should_retry:
+                        raise
 
-                now = loop.time()
-                remaining_seconds = deadline - now
-                if remaining_seconds <= 0:
-                    await self._close_forwarder()
-                    raise TimeoutError(
-                        "timed out waiting for playwright websocket endpoint to become ready"
-                    ) from error
+                    now = loop.time()
+                    remaining_seconds = deadline - now
+                    if remaining_seconds <= 0:
+                        raise TimeoutError(
+                            "timed out waiting for playwright websocket endpoint to become ready"
+                        ) from error
 
-                delay_seconds = min(backoff_seconds, remaining_seconds)
-                logger.info(
-                    (
-                        "failed to connect to playwright on attempt %s; "
-                        "retrying in %.2fs (%s)"
-                    ),
-                    attempt,
-                    delay_seconds,
-                    error,
-                )
-                logger.debug(
-                    "playwright connect retryable error details",
-                    exc_info=error,
-                )
-                await self._close_forwarder()
-                await asyncio.sleep(delay_seconds)
-                backoff_seconds = min(
-                    backoff_seconds * 2,
-                    self.connect_backoff_max_seconds,
-                )
-                attempt += 1
+                    delay_seconds = min(backoff_seconds, remaining_seconds)
+                    reason = str(error).strip()
+                    if not reason:
+                        reason = "playwright browser session is still initializing"
+                    if reason == "playwright container is still starting":
+                        logger.info(
+                            (
+                                "playwright container is still starting "
+                                "(attempt %s); checking again in %.2fs"
+                            ),
+                            attempt,
+                            delay_seconds,
+                        )
+                    elif reason == "playwright browser session is still initializing":
+                        await self._reset_after_connect_failure()
+                        logger.info(
+                            (
+                                "playwright endpoint is up but the browser session "
+                                "is still initializing (attempt %s); retrying in %.2fs"
+                            ),
+                            attempt,
+                            delay_seconds,
+                        )
+                    else:
+                        await self._reset_after_connect_failure()
+                        logger.info(
+                            (
+                                "playwright startup attempt %s failed; "
+                                "retrying in %.2fs (%s)"
+                            ),
+                            attempt,
+                            delay_seconds,
+                            reason,
+                        )
+                    logger.debug(
+                        "playwright startup retryable error details",
+                        exc_info=error,
+                    )
+                    await asyncio.sleep(delay_seconds)
+                    backoff_seconds = min(
+                        backoff_seconds * 2,
+                        self.connect_backoff_max_seconds,
+                    )
+                    attempt += 1
+        except asyncio.CancelledError:
+            await self._close_forwarder()
+            raise
+        except Exception:
+            await self._close_forwarder()
+            raise
 
         logger.info("playwright ready")
         await page.goto(self.starting_url)

@@ -48,7 +48,6 @@ async def test_operator_handles_batched_computer_actions():
         {
             "type": "computer_call_output",
             "call_id": "call_1",
-            "acknowledged_safety_checks": [],
             "output": {
                 "type": "computer_screenshot",
                 "image_url": "data:image/png;base64,ZmFrZS1zY3JlZW5zaG90",
@@ -75,6 +74,7 @@ async def test_operator_supports_legacy_single_action_shape():
     assert computer.calls == [("wait", {})]
     assert outputs[0]["type"] == "computer_call_output"
     assert outputs[0]["call_id"] == "call_2"
+    assert "acknowledged_safety_checks" not in outputs[0]
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_operator_treats_missing_pending_safety_checks_as_empty():
 
     assert computer.calls == [("wait", {})]
     assert outputs[0]["type"] == "computer_call_output"
-    assert outputs[0]["acknowledged_safety_checks"] == []
+    assert "acknowledged_safety_checks" not in outputs[0]
 
 
 @pytest.mark.asyncio

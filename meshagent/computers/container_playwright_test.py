@@ -19,61 +19,11 @@ def _clear_playwright_dimensions_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_playwright_version_falls_back_to_repo_module_and_warns(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    def _missing_metadata(name: str) -> str:
-        del name
-        raise container_playwright_module.PackageNotFoundError("playwright")
-
-    monkeypatch.setattr(
-        container_playwright_module,
-        "package_version",
-        _missing_metadata,
-    )
-    monkeypatch.setattr(
-        container_playwright_module,
-        "import_module",
-        lambda module: SimpleNamespace(version="1.58.0"),
-    )
-
-    caplog.set_level("WARNING", logger="computer_use")
-
-    assert container_playwright_module._playwright_version() == "1.58.0"
-    assert any(
-        "package metadata is unavailable" in record.message for record in caplog.records
-    )
-
-
-def test_playwright_version_no_warning_when_fallback_module_is_missing(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    def _missing_metadata(name: str) -> str:
-        del name
-        raise container_playwright_module.PackageNotFoundError("playwright")
-
-    def _missing_module(module: str) -> SimpleNamespace:
-        del module
-        raise ModuleNotFoundError("playwright._repo_version")
-
-    monkeypatch.setattr(
-        container_playwright_module,
-        "package_version",
-        _missing_metadata,
-    )
-    monkeypatch.setattr(
-        container_playwright_module,
-        "import_module",
-        _missing_module,
-    )
-
-    caplog.set_level("WARNING", logger="computer_use")
-
-    with pytest.raises(RuntimeError, match="playwright is not installed"):
-        container_playwright_module._playwright_version()
-
-    assert not any(
-        "package metadata is unavailable" in record.message for record in caplog.records
+def test_container_playwright_uses_preinstalled_playwright_server_command() -> None:
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    assert computer.container_command == (
+        '/bin/sh -c "playwright run-server --port 3000 --host 0.0.0.0"'
     )
 
 
@@ -154,11 +104,18 @@ class _FakeChromium:
         self._responses = list(responses)
         self.connect_calls: list[dict[str, object]] = []
 
-    async def connect(self, base_url: str, headers: dict[str, str]) -> object:
+    async def connect(
+        self,
+        base_url: str,
+        *,
+        headers: dict[str, str],
+        timeout: float,
+    ) -> object:
         self.connect_calls.append(
             {
                 "base_url": base_url,
                 "headers": headers,
+                "timeout": timeout,
             }
         )
         response = self._responses[
@@ -185,6 +142,11 @@ class _FakeRoom:
         self.containers = SimpleNamespace()
 
 
+async def _health_check_ready(*, base_url: str, timeout_seconds: float) -> str:
+    del timeout_seconds
+    return base_url
+
+
 @pytest.mark.asyncio
 async def test_container_playwright_uses_custom_starting_url() -> None:
     room = _FakeRoom()
@@ -203,6 +165,7 @@ async def test_container_playwright_uses_custom_starting_url() -> None:
 
     computer.ensure_container = _ensure_container  # type: ignore[method-assign]
     computer._base_url = _base_url  # type: ignore[method-assign]
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
 
     page = _FakePage()
     browser = _FakeBrowser(page=page)
@@ -215,6 +178,46 @@ async def test_container_playwright_uses_custom_starting_url() -> None:
     assert connected_page is page
     assert page.viewport_calls == [{"width": 1440, "height": 900}]
     assert page.goto_calls == ["https://example.com"]
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_uses_ws_endpoint_returned_by_health_check() -> None:
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    async def _base_url(*, container_id: str) -> str:
+        assert container_id == "container_1"
+        return "ws://127.0.0.1:62000/"
+
+    async def _health_check(
+        *,
+        base_url: str,
+        timeout_seconds: float,
+    ) -> str:
+        assert base_url == "ws://127.0.0.1:62000/"
+        assert timeout_seconds > 0
+        return "ws://127.0.0.1:62000/secret-path"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+    computer._base_url = _base_url  # type: ignore[method-assign]
+    computer._check_server_ready_once = _health_check  # type: ignore[method-assign]
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(responses=[browser])
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert len(chromium.connect_calls) == 1
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:62000/secret-path"
+    assert chromium.connect_calls[0]["headers"] == {}
+    assert chromium.connect_calls[0]["timeout"] > 0
 
 
 @pytest.mark.asyncio
@@ -258,6 +261,14 @@ async def test_container_playwright_retries_connect_on_port_forward_failure(
         return forwarder
 
     monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
+
+    restart_calls: list[bool] = []
+
+    async def _restart_playwright_client() -> None:
+        restart_calls.append(True)
+
+    computer.restart_playwright_client = _restart_playwright_client  # type: ignore[method-assign]
 
     page = _FakePage()
     browser = _FakeBrowser(page=page)
@@ -276,6 +287,7 @@ async def test_container_playwright_retries_connect_on_port_forward_failure(
     assert len(chromium.connect_calls) == 2
     assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:62000/"
     assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:62001/"
+    assert restart_calls == [True]
     assert sleep_calls == [0.1]
     assert len(forwarders) == 2
     assert forwarders[0].close_calls == 1
@@ -318,6 +330,7 @@ async def test_container_playwright_retry_times_out_with_max_deadline(
         return forwarder
 
     monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
 
     chromium = _FakeChromium(
         responses=[
@@ -378,6 +391,14 @@ async def test_container_playwright_retries_when_page_setup_hangs(
         return forwarder
 
     monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
+
+    restart_calls: list[bool] = []
+
+    async def _restart_playwright_client() -> None:
+        restart_calls.append(True)
+
+    computer.restart_playwright_client = _restart_playwright_client  # type: ignore[method-assign]
 
     async def _hang_new_page() -> _FakePage:
         await asyncio.Future()
@@ -400,6 +421,7 @@ async def test_container_playwright_retries_when_page_setup_hangs(
     assert len(chromium.connect_calls) == 2
     assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:63500/"
     assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:63501/"
+    assert restart_calls == [True]
     assert sleep_calls == [0.1]
     assert len(forwarders) == 2
     assert forwarders[0].close_calls == 1
@@ -450,6 +472,14 @@ async def test_container_playwright_retries_direct_connect_on_connection_refused
         return forwarder
 
     monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
+
+    restart_calls: list[bool] = []
+
+    async def _restart_playwright_client() -> None:
+        restart_calls.append(True)
+
+    computer.restart_playwright_client = _restart_playwright_client  # type: ignore[method-assign]
 
     page = _FakePage()
     browser = _FakeBrowser(page=page)
@@ -468,6 +498,81 @@ async def test_container_playwright_retries_direct_connect_on_connection_refused
     assert len(chromium.connect_calls) == 2
     assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:64000/"
     assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:64001/"
+    assert restart_calls == [True]
+    assert sleep_calls == [0.1]
+    assert len(forwarders) == 2
+    assert forwarders[0].close_calls == 1
+    assert forwarders[1].close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_resets_client_after_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MESHAGENT_SESSION_ID", raising=False)
+    monkeypatch.delenv("MESHAGENT_TUNNEL_PLAYWRIGHT", raising=False)
+
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    computer.connect_timeout_seconds = 5.0
+    computer.connect_backoff_initial_seconds = 0.1
+    computer.connect_backoff_max_seconds = 0.5
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(container_playwright_module.asyncio, "sleep", _fake_sleep)
+
+    forwarders: list[_FakeForwarder] = []
+
+    async def _fake_port_forward(
+        *,
+        container_id: str,
+        port: int,
+        token: str,
+    ) -> _FakeForwarder:
+        assert container_id == "container_1"
+        assert port == 3000
+        assert token == "token"
+        forwarder = _FakeForwarder(host="127.0.0.1", port=64500 + len(forwarders))
+        forwarders.append(forwarder)
+        return forwarder
+
+    monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
+
+    restart_calls: list[bool] = []
+
+    async def _restart_playwright_client() -> None:
+        restart_calls.append(True)
+
+    computer.restart_playwright_client = _restart_playwright_client  # type: ignore[method-assign]
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(
+        responses=[
+            PlaywrightError("Connection timed out"),
+            browser,
+        ]
+    )
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert len(chromium.connect_calls) == 2
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:64500/"
+    assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:64501/"
+    assert restart_calls == [True]
     assert sleep_calls == [0.1]
     assert len(forwarders) == 2
     assert forwarders[0].close_calls == 1
@@ -515,6 +620,14 @@ async def test_container_playwright_retries_direct_connect_on_socket_hang_up(
         return forwarder
 
     monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+    computer._check_server_ready_once = _health_check_ready  # type: ignore[method-assign]
+
+    restart_calls: list[bool] = []
+
+    async def _restart_playwright_client() -> None:
+        restart_calls.append(True)
+
+    computer.restart_playwright_client = _restart_playwright_client  # type: ignore[method-assign]
 
     page = _FakePage()
     browser = _FakeBrowser(page=page)
@@ -535,7 +648,78 @@ async def test_container_playwright_retries_direct_connect_on_socket_hang_up(
     assert len(chromium.connect_calls) == 2
     assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:65000/"
     assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:65001/"
+    assert restart_calls == [True]
     assert sleep_calls == [0.1]
     assert len(forwarders) == 2
     assert forwarders[0].close_calls == 1
     assert forwarders[1].close_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_retries_until_http_health_check_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    room = _FakeRoom()
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    computer.connect_timeout_seconds = 5.0
+    computer.connect_backoff_initial_seconds = 0.1
+    computer.connect_backoff_max_seconds = 0.5
+
+    async def _ensure_container() -> str:
+        return "container_1"
+
+    computer.ensure_container = _ensure_container  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(container_playwright_module.asyncio, "sleep", _fake_sleep)
+
+    forwarders: list[_FakeForwarder] = []
+
+    async def _fake_port_forward(
+        *,
+        container_id: str,
+        port: int,
+        token: str,
+    ) -> _FakeForwarder:
+        assert container_id == "container_1"
+        assert port == 3000
+        assert token == "token"
+        forwarder = _FakeForwarder(host="127.0.0.1", port=65500 + len(forwarders))
+        forwarders.append(forwarder)
+        return forwarder
+
+    monkeypatch.setattr(container_playwright_module, "port_forward", _fake_port_forward)
+
+    health_calls: list[tuple[str, float]] = []
+
+    async def _fake_health_check(*, base_url: str, timeout_seconds: float) -> str:
+        health_calls.append((base_url, timeout_seconds))
+        if len(health_calls) == 1:
+            raise ConnectionError("playwright container is still starting")
+        return base_url
+
+    computer._check_server_ready_once = _fake_health_check  # type: ignore[method-assign]
+
+    page = _FakePage()
+    browser = _FakeBrowser(page=page)
+    chromium = _FakeChromium(responses=[browser])
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    connected_browser, connected_page = await computer._get_browser_and_page()
+
+    assert connected_browser is browser
+    assert connected_page is page
+    assert [base_url for base_url, _ in health_calls] == [
+        "ws://127.0.0.1:65500/",
+        "ws://127.0.0.1:65500/",
+    ]
+    assert all(timeout_seconds > 0 for _, timeout_seconds in health_calls)
+    assert len(chromium.connect_calls) == 1
+    assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:65500/"
+    assert sleep_calls == [0.1]
+    assert len(forwarders) == 1
+    assert forwarders[0].close_calls == 0
