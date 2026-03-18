@@ -1,12 +1,11 @@
-import os
-import requests
-from dotenv import load_dotenv
-import json
 import base64
-from PIL import Image
-from io import BytesIO
 import io
+import json
+from io import BytesIO
 from urllib.parse import urlparse
+
+from dotenv import load_dotenv
+from PIL import Image
 
 load_dotenv(override=True)
 
@@ -45,27 +44,6 @@ def sanitize_message(msg: dict) -> dict:
             sanitized["output"] = {**output, "image_url": "[omitted]"}
             return sanitized
     return msg
-
-
-def track_response(**kwargs):
-    url = "https://api.openai.com/v1/responses"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
-        "Content-Type": "application/json",
-        # TODO: remove for launch
-        "Openai-beta": "responses=v1",
-    }
-
-    openai_org = os.getenv("OPENAI_ORG")
-    if openai_org:
-        headers["Openai-Organization"] = openai_org
-
-    response = requests.post(url, headers=headers, json=kwargs)
-
-    if response.status_code != 200:
-        print(f"Error: {response.status_code} {response.text}")
-
-    return response.json()
 
 
 def check_blocklisted_url(url: str) -> None:
