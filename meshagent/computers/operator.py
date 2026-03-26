@@ -1,8 +1,12 @@
 from collections.abc import Awaitable, Callable
+import inspect
+import json
+import logging
 
 from .computer import Computer, ComputerContext
 from .utils import check_blocklisted_url
-import json
+
+logger = logging.getLogger(__name__)
 
 
 class Operator:
@@ -54,6 +58,39 @@ class Operator:
             raise ValueError(f"unsupported computer action: {action_type}")
         return method
 
+    @staticmethod
+    def _filter_action_args(
+        *,
+        method: Callable[..., Awaitable[object]],
+        action_type: str,
+        action_args: dict[str, object],
+    ) -> dict[str, object]:
+        signature = inspect.signature(method)
+        allowed_names: set[str] = set()
+
+        for name, parameter in signature.parameters.items():
+            if name == "context":
+                continue
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                return action_args
+            if parameter.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ):
+                allowed_names.add(name)
+
+        filtered_args = {
+            name: value for name, value in action_args.items() if name in allowed_names
+        }
+        dropped_args = sorted(name for name in action_args if name not in allowed_names)
+        if dropped_args:
+            logger.warning(
+                "ignoring unsupported arguments for computer action %s: %s",
+                action_type,
+                ", ".join(dropped_args),
+            )
+        return filtered_args
+
     async def play(
         self,
         context: ComputerContext,
@@ -68,7 +105,14 @@ class Operator:
                 computer=computer,
                 action_type=name,
             )
-            await method(context, **args)
+            await method(
+                context,
+                **self._filter_action_args(
+                    method=method,
+                    action_type=name,
+                    action_args=args,
+                ),
+            )
             return [
                 {
                     "type": "function_call_output",
@@ -86,7 +130,14 @@ class Operator:
                     computer=computer,
                     action_type=action_type,
                 )
-                await method(context, **action_args)
+                await method(
+                    context,
+                    **self._filter_action_args(
+                        method=method,
+                        action_type=action_type,
+                        action_args=action_args,
+                    ),
+                )
 
             screenshot_base64 = await computer.screenshot(context)
             if self.show_images:

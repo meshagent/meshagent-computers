@@ -166,6 +166,30 @@ async def test_operator_supports_legacy_single_action_shape():
 
 
 @pytest.mark.asyncio
+async def test_operator_ignores_unsupported_action_arguments():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    outputs = await operator.play(
+        context,
+        computer=computer,
+        item={
+            "type": "computer_call",
+            "call_id": "call_extra_args",
+            "action": {"type": "click", "x": 10, "y": 20, "keys": ["CTRL"]},
+            "pending_safety_checks": [],
+        },
+    )
+
+    assert computer.calls == [("click", {"x": 10, "y": 20})]
+    assert outputs[0]["type"] == "computer_call_output"
+
+
+@pytest.mark.asyncio
 async def test_operator_treats_missing_pending_safety_checks_as_empty():
     operator = Operator()
     computer = _FakeComputer()
