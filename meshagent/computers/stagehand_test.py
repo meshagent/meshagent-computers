@@ -207,6 +207,11 @@ def test_stagehand_available_requires_local_browser(
 ) -> None:
     monkeypatch.setattr(
         stagehand_module,
+        "_stagehand_sea_binary_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        stagehand_module,
         "_playwright_local_browser_available",
         lambda *, local_headless, local_chrome_path: (
             local_headless is True and local_chrome_path == "/tmp/browser"
@@ -224,6 +229,29 @@ def test_stagehand_available_requires_local_browser(
         stagehand_module.stagehand_available(
             local_headless=True,
             local_chrome_path="/tmp/missing-browser",
+        )
+        is False
+    )
+
+
+def test_stagehand_available_requires_sea_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        stagehand_module,
+        "_stagehand_sea_binary_available",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        stagehand_module,
+        "_playwright_local_browser_available",
+        lambda *, local_headless, local_chrome_path: True,
+    )
+
+    assert (
+        stagehand_module.stagehand_available(
+            local_headless=True,
+            local_chrome_path="/tmp/browser",
         )
         is False
     )

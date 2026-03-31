@@ -185,6 +185,20 @@ def _playwright_local_browser_available(
     return executable_path is not None and executable_path.exists()
 
 
+def _stagehand_sea_binary_available() -> bool:
+    try:
+        from stagehand.lib.sea_binary import resolve_binary_path
+    except (ImportError, ModuleNotFoundError):
+        return False
+
+    try:
+        resolve_binary_path()
+    except FileNotFoundError:
+        return False
+
+    return True
+
+
 def stagehand_available(
     *,
     local_headless: bool = True,
@@ -194,7 +208,7 @@ def stagehand_available(
         import stagehand  # noqa: F401
     except ModuleNotFoundError:
         return False
-    return _playwright_local_browser_available(
+    return _stagehand_sea_binary_available() and _playwright_local_browser_available(
         local_headless=local_headless,
         local_chrome_path=local_chrome_path,
     )
