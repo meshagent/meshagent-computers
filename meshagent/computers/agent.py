@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable, Optional
 from meshagent.agents import LLMAdapter
 from meshagent.agents.images_database import ImagesDatabase
 from meshagent.agents.thread_adapter import ThreadAdapter
-from meshagent.tools import FunctionTool, Toolkit, ToolContext
+from meshagent.tools import FunctionTool, LocalRoomTool, Toolkit, ToolContext
 from meshagent.agents.chat import ChatBot, ChatThreadContext
 from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
@@ -100,12 +100,19 @@ class ComputerTool(OpenAIResponsesTool):
         return outputs[0]
 
 
-class ScreenshotTool(FunctionTool):
-    def __init__(self, computer: Computer, toolkit: "ComputerToolkit"):
+class ScreenshotTool(LocalRoomTool):
+    def __init__(
+        self,
+        *,
+        room: RoomClient,
+        computer: Computer,
+        toolkit: "ComputerToolkit",
+    ):
         self.computer = computer
         self.toolkit = toolkit
 
         super().__init__(
+            room=room,
             name="screenshot",
             # TODO: give a correct schema
             input_schema={
@@ -130,7 +137,7 @@ class ScreenshotTool(FunctionTool):
             computer_context,
             full_page=full_page,
         )
-        await context.room.storage.upload(
+        await self.room.storage.upload(
             path=save_path,
             data=screenshot_bytes,
             overwrite=True,
@@ -245,7 +252,6 @@ class ComputerToolkit(Toolkit):
         self.operator = operator
         self.started = False
         self._starting = asyncio.Lock()
-        self.room = room
         self.thread_path = thread_path
         self.thread_adapter = thread_adapter
         self._images_db = images_db
@@ -276,6 +282,7 @@ class ComputerToolkit(Toolkit):
 
         super().__init__(
             name=name,
+            room=room,
             tools=tools,
         )
 
@@ -371,7 +378,7 @@ class ComputerToolkit(Toolkit):
 
     def make_computer_context(self, *, tool_context: ToolContext) -> ComputerContext:
         return ComputerContext(
-            room=tool_context.room,
+            room=self.room,
             caller=tool_context.caller,
             on_behalf_of=tool_context.on_behalf_of,
             caller_context=tool_context.caller_context,
