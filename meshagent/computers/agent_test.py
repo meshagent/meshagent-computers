@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from meshagent.agents.images_database import SavedImage
+from meshagent.agents.images_dataset import SavedImage
 from meshagent.computers import agent as agent_module
 from meshagent.computers import base_playwright as base_playwright_module
 from meshagent.computers.agent import ComputerToolkit
@@ -44,7 +44,7 @@ class _FakeRoom:
         self.local_participant = _FakeParticipant(name=name)
 
 
-class _FakeImagesDatabase:
+class _FakeImagesDataset:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
 
@@ -123,21 +123,21 @@ class _FakeThreadAdapter:
 
 @pytest.mark.asyncio
 async def test_default_render_screen_saves_and_attaches_screenshot():
-    images_db = _FakeImagesDatabase()
+    images_dataset = _FakeImagesDataset()
     adapter = _FakeThreadAdapter()
     toolkit = ComputerToolkit(
         computer=_FakeComputer(),
         room=_FakeRoom(name="agent"),
         thread_path="/threads/demo",
         thread_adapter=adapter,
-        images_db=images_db,
+        images_dataset=images_dataset,
     )
     assert toolkit.render_screen is not None
 
     await toolkit.render_screen(b"screen-bytes")
 
-    assert len(images_db.calls) == 1
-    save_call = images_db.calls[0]
+    assert len(images_dataset.calls) == 1
+    save_call = images_dataset.calls[0]
     assert save_call["data"] == b"screen-bytes"
     assert save_call["mime_type"] == "image/png"
     assert save_call["created_by"] == "agent"
@@ -160,20 +160,20 @@ async def test_default_render_screen_saves_and_attaches_screenshot():
 
 @pytest.mark.asyncio
 async def test_default_render_screen_skips_without_thread_context():
-    images_db = _FakeImagesDatabase()
+    images_dataset = _FakeImagesDataset()
     adapter = _FakeThreadAdapter()
     toolkit = ComputerToolkit(
         computer=_FakeComputer(),
         room=_FakeRoom(name="agent"),
         thread_path=None,
         thread_adapter=adapter,
-        images_db=images_db,
+        images_dataset=images_dataset,
     )
     assert toolkit.render_screen is not None
 
     await toolkit.render_screen(b"screen-bytes")
 
-    assert images_db.calls == []
+    assert images_dataset.calls == []
     assert adapter.calls == []
 
 

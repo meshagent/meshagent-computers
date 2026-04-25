@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any, Awaitable, Callable, Optional
 
 from meshagent.agents import LLMAdapter
-from meshagent.agents.images_database import ImagesDatabase
+from meshagent.agents.images_dataset import ImagesDataset
 from meshagent.agents.thread_adapter import ThreadAdapter
 from meshagent.tools import FunctionTool, LocalRoomTool, Toolkit, ToolContext
 from meshagent.agents.chat import ChatBot, ChatThreadContext
@@ -206,7 +206,7 @@ class ComputerToolkit(Toolkit):
         render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
         thread_path: Optional[str] = None,
         thread_adapter: Optional[ThreadAdapter] = None,
-        images_db: Optional[ImagesDatabase] = None,
+        images_dataset: Optional[ImagesDataset] = None,
         include_goto_tool: bool = False,
         starting_url: str | None = None,
     ):
@@ -254,7 +254,7 @@ class ComputerToolkit(Toolkit):
         self._starting = asyncio.Lock()
         self.thread_path = thread_path
         self.thread_adapter = thread_adapter
-        self._images_db = images_db
+        self._images_dataset = images_dataset
         self.include_goto_tool = include_goto_tool
 
         self.render_screen = (
@@ -302,11 +302,11 @@ class ComputerToolkit(Toolkit):
         if not isinstance(created_by, str):
             created_by = ""
 
-        if self._images_db is None:
-            self._images_db = ImagesDatabase(room=self.room)
+        if self._images_dataset is None:
+            self._images_dataset = ImagesDataset(room=self.room)
 
         try:
-            saved_image = await self._images_db.save(
+            saved_image = await self._images_dataset.save(
                 data=image_bytes,
                 mime_type="image/png",
                 created_by=created_by,
