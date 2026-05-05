@@ -3,7 +3,6 @@ from typing import Any
 
 import pytest
 
-from meshagent.agents.images_dataset import SavedImage
 from meshagent.computers import agent as agent_module
 from meshagent.computers import base_playwright as base_playwright_module
 from meshagent.computers.agent import ComputerToolkit
@@ -44,35 +43,6 @@ class _FakeRoom:
         self.local_participant = _FakeParticipant(name=name)
 
 
-class _FakeImagesDataset:
-    def __init__(self):
-        self.calls: list[dict[str, Any]] = []
-
-    async def save(
-        self,
-        *,
-        data: bytes,
-        mime_type: str,
-        created_by: str,
-        annotations: dict[str, str],
-    ) -> SavedImage:
-        self.calls.append(
-            {
-                "data": data,
-                "mime_type": mime_type,
-                "created_by": created_by,
-                "annotations": annotations,
-            }
-        )
-        return SavedImage(
-            id="img_1",
-            mime_type=mime_type,
-            created_at="2026-02-20T00:00:00Z",
-            created_by=created_by,
-            annotations=annotations,
-        )
-
-
 class _FakeOperator:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
@@ -88,93 +58,13 @@ class _FakeOperator:
         return [{"type": "computer_call_output", "output": None}]
 
 
-class _FakeThreadAdapter:
-    def __init__(self):
-        self.calls: list[dict[str, Any]] = []
-
-    def write_image(
-        self,
-        *,
-        message_id: str | None,
-        image_id: str,
-        mime_type: str,
-        created_at: str,
-        created_by: str,
-        width: int | float | None = None,
-        height: int | float | None = None,
-        status: str | None = None,
-        status_detail: str | None = None,
-    ) -> str:
-        self.calls.append(
-            {
-                "message_id": message_id,
-                "image_id": image_id,
-                "mime_type": mime_type,
-                "created_at": created_at,
-                "created_by": created_by,
-                "width": width,
-                "height": height,
-                "status": status,
-                "status_detail": status_detail,
-            }
-        )
-        return message_id or ""
-
-
-@pytest.mark.asyncio
-async def test_default_render_screen_saves_and_attaches_screenshot():
-    images_dataset = _FakeImagesDataset()
-    adapter = _FakeThreadAdapter()
+def test_computer_toolkit_has_no_default_render_screen():
     toolkit = ComputerToolkit(
         computer=_FakeComputer(),
         room=_FakeRoom(name="agent"),
-        thread_path="/threads/demo",
-        thread_adapter=adapter,
-        images_dataset=images_dataset,
     )
-    assert toolkit.render_screen is not None
 
-    await toolkit.render_screen(b"screen-bytes")
-
-    assert len(images_dataset.calls) == 1
-    save_call = images_dataset.calls[0]
-    assert save_call["data"] == b"screen-bytes"
-    assert save_call["mime_type"] == "image/png"
-    assert save_call["created_by"] == "agent"
-    assert save_call["annotations"] == {
-        "source": "computer_toolkit",
-        "thread_path": "/threads/demo",
-    }
-
-    assert len(adapter.calls) == 1
-    assert adapter.calls[0]["image_id"] == "img_1"
-    assert adapter.calls[0]["mime_type"] == "image/png"
-    assert adapter.calls[0]["created_by"] == "agent"
-    assert adapter.calls[0]["width"] == 1024
-    assert adapter.calls[0]["height"] == 768
-    assert adapter.calls[0]["status"] == "completed"
-    assert adapter.calls[0]["status_detail"] == "Screenshot saved"
-    assert isinstance(adapter.calls[0]["message_id"], str)
-    assert adapter.calls[0]["message_id"] != ""
-
-
-@pytest.mark.asyncio
-async def test_default_render_screen_skips_without_thread_context():
-    images_dataset = _FakeImagesDataset()
-    adapter = _FakeThreadAdapter()
-    toolkit = ComputerToolkit(
-        computer=_FakeComputer(),
-        room=_FakeRoom(name="agent"),
-        thread_path=None,
-        thread_adapter=adapter,
-        images_dataset=images_dataset,
-    )
-    assert toolkit.render_screen is not None
-
-    await toolkit.render_screen(b"screen-bytes")
-
-    assert images_dataset.calls == []
-    assert adapter.calls == []
+    assert toolkit.render_screen is None
 
 
 @pytest.mark.asyncio
@@ -190,7 +80,6 @@ async def test_computer_tool_emits_startup_progress_events():
     )
     events: list[dict[str, Any]] = []
     context = ToolContext(
-        room=room,
         caller=room.local_participant,
         event_handler=events.append,
     )
@@ -240,7 +129,6 @@ async def test_computer_tool_propagates_computer_startup_events_via_tool_context
     )
     events: list[dict[str, Any]] = []
     context = ToolContext(
-        room=room,
         caller=room.local_participant,
         event_handler=events.append,
     )
@@ -639,38 +527,3 @@ def test_computer_toolkit_prefers_stagehand_when_available(
     assert recorded["starting_url"] == "https://example.com"
     assert toolkit.computer.starting_url == "https://example.com"
     assert toolkit.computer.dimensions == (1600, 900)
-
-
-@pytest.mark.asyncio
-async def test_computer_chatbot_make_computer_prefers_stagehand_when_available(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    recorded: dict[str, Any] = {}
-
-    class _FakeStagehandComputer:
-        environment = "browser"
-
-        def __init__(
-            self,
-            *,
-            dimensions: tuple[int, int] | None = None,
-            starting_url: str | None = None,
-        ) -> None:
-            recorded["dimensions"] = dimensions
-            recorded["starting_url"] = starting_url
-
-    monkeypatch.setattr(agent_module, "stagehand_available", lambda: True)
-    monkeypatch.setattr(agent_module, "StagehandComputer", _FakeStagehandComputer)
-
-    bot = agent_module.ComputerChatBot(
-        name="computer",
-        dimensions=(1600, 900),
-        starting_url="https://example.com",
-    )
-    bot._room = _FakeRoom(name="agent")
-
-    computer = await bot.make_computer()
-
-    assert isinstance(computer, _FakeStagehandComputer)
-    assert recorded["dimensions"] == (1600, 900)
-    assert recorded["starting_url"] == "https://example.com"

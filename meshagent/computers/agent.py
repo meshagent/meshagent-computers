@@ -2,16 +2,10 @@ import asyncio
 import base64
 import inspect
 import logging
-import uuid
 from collections.abc import Sequence
 from typing import Any, Awaitable, Callable, Optional
 
-from meshagent.agents import LLMAdapter
-from meshagent.agents.images_dataset import ImagesDataset
-from meshagent.agents.thread_adapter import ThreadAdapter
 from meshagent.tools import FunctionTool, LocalRoomTool, Toolkit, ToolContext
-from meshagent.agents.chat import ChatBot, ChatThreadContext
-from meshagent.api import RemoteParticipant
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 from meshagent.api import RoomClient
 
@@ -204,9 +198,6 @@ class ComputerToolkit(Toolkit):
         operator: Optional[Operator] = None,
         room: Optional[RoomClient] = None,
         render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
-        thread_path: Optional[str] = None,
-        thread_adapter: Optional[ThreadAdapter] = None,
-        images_dataset: Optional[ImagesDataset] = None,
         include_goto_tool: bool = False,
         starting_url: str | None = None,
     ):
@@ -252,14 +243,8 @@ class ComputerToolkit(Toolkit):
         self.operator = operator
         self.started = False
         self._starting = asyncio.Lock()
-        self.thread_path = thread_path
-        self.thread_adapter = thread_adapter
-        self._images_dataset = images_dataset
         self.include_goto_tool = include_goto_tool
-
-        self.render_screen = (
-            render_screen if render_screen is not None else self.save_screen_image
-        )
+        self.render_screen = render_screen
 
         tools = [
             ComputerTool(
@@ -285,55 +270,6 @@ class ComputerToolkit(Toolkit):
             room=room,
             tools=tools,
         )
-
-    async def save_screen_image(self, image_bytes: bytes) -> None:
-        if self.room is None:
-            return
-        if not isinstance(self.thread_path, str) or self.thread_path.strip() == "":
-            return
-        if self.thread_adapter is None:
-            logger.warning(
-                "thread adapter was not available for screenshot persistence",
-                extra={"path": self.thread_path},
-            )
-            return
-
-        created_by = self.room.local_participant.get_attribute("name")
-        if not isinstance(created_by, str):
-            created_by = ""
-
-        if self._images_dataset is None:
-            self._images_dataset = ImagesDataset(room=self.room)
-
-        try:
-            saved_image = await self._images_dataset.save(
-                data=image_bytes,
-                mime_type="image/png",
-                created_by=created_by,
-                annotations={
-                    "source": "computer_toolkit",
-                    "thread_path": self.thread_path,
-                },
-            )
-        except Exception as ex:
-            logger.error("failed to persist computer screenshot", exc_info=ex)
-            return
-
-        try:
-            width, height = self.computer.dimensions
-            self.thread_adapter.write_image(
-                message_id=str(uuid.uuid4()),
-                image_id=saved_image.id,
-                mime_type=saved_image.mime_type,
-                created_at=saved_image.created_at,
-                created_by=saved_image.created_by,
-                width=width,
-                height=height,
-                status="completed",
-                status_detail="Screenshot saved",
-            )
-        except Exception as ex:
-            logger.error("failed to attach computer screenshot to thread", exc_info=ex)
 
     async def __aenter__(self):
         await self.ensure_started(context=self.make_bootstrap_computer_context())
@@ -443,83 +379,3 @@ class ComputerToolkit(Toolkit):
         if self.started:
             self.started = False
             await self.computer.__aexit__(None, None, None)
-
-
-class ComputerChatBot(ChatBot):
-    def __init__(
-        self,
-        *,
-        name,
-        title=None,
-        description=None,
-        requires=None,
-        annotations=None,
-        rules: Optional[list[str]] = None,
-        llm_adapter: Optional[LLMAdapter] = None,
-        toolkits: list[Toolkit] = None,
-        dimensions: Optional[tuple[int, int]] = None,
-        include_goto_tool: Optional[bool] = None,
-        starting_url: str | None = None,
-    ):
-        if rules is None:
-            rules = []
-        super().__init__(
-            name=name,
-            title=title,
-            description=description,
-            requires=requires,
-            annotations=annotations,
-            llm_adapter=llm_adapter,
-            toolkits=toolkits,
-            rules=rules,
-        )
-        self.operator: Optional[Operator] = None
-        self.computer: Optional[Computer] = None
-        self.computer_dimensions: Optional[tuple[int, int]] = dimensions
-        self.include_goto_tool: Optional[bool] = include_goto_tool
-        self.starting_url: str | None = starting_url
-
-    async def make_operator(self) -> Operator:
-        return Operator()
-
-    async def make_computer(self) -> Computer:
-        if stagehand_available():
-            return StagehandComputer(
-                dimensions=self.computer_dimensions,
-                starting_url=self.starting_url,
-            )
-
-        return ContainerPlaywrightComputer(
-            room=self.room,
-            dimensions=self.computer_dimensions,
-            starting_url=self.starting_url,
-        )
-
-    async def get_thread_toolkits(
-        self, *, thread_context: ChatThreadContext, participant: RemoteParticipant
-    ):
-        toolkits = await super().get_thread_toolkits(
-            thread_context=thread_context, participant=participant
-        )
-
-        if self.operator is None:
-            self.operator = await self.make_operator()
-        if self.computer is None:
-            self.computer = await self.make_computer()
-
-        thread_adapter = self._open_threads.get(thread_context.path)
-        if not isinstance(thread_adapter, ThreadAdapter):
-            thread_adapter = None
-
-        computer_toolkit = ComputerToolkit(
-            operator=self.operator,
-            computer=self.computer,
-            dimensions=self.computer_dimensions,
-            room=self.room,
-            thread_path=thread_context.path,
-            thread_adapter=thread_adapter,
-            include_goto_tool=self.include_goto_tool or False,
-            starting_url=self.starting_url,
-        )
-
-        return [computer_toolkit, *toolkits]

@@ -2,38 +2,10 @@
 
 ## MeshAgent Computers
 
-The ``meshagent.computers`` package defines abstractions for controlling browsers and operating systems and providing these abilities to agents. 
-
-### ComputerChatBot
-The ComputerChatBot in `meshagent-computers` extends the ``ChatBot`` with support for using browsers and computers. The computer agent will periodically send screenshots to participants on the thread using the MeshAgent messaging protocol, by sending a message of the type "computer_screen" and an attachment that contains a binary screenshot. 
-
-```Python Python
-from meshagent.api import RequiredToolkit
-from meshagent.openai import OpenAIResponsesAdapter
-from meshagent.computers import ComputerChatBot, BrowserbaseBrowser, Operator
-from meshagent.api.services import ServiceHost
-
-service = ServiceHost()
-
-@service.path("/ComputerChatBot")
-class BrowserbaseAgent(ComputerChatBot):
-    def __init__(self):
-        super().__init__(
-            name="meshagent.browser",
-            title="browser agent",
-            description="a task runner that can use a browser",
-            requires=[RequiredToolkit(name="ui", tools=[])],
-            llm_adapter=OpenAIResponsesAdapter(
-                model="gpt-5.4",
-                response_options={"reasoning": {"summary": "concise"}},
-            ),
-            labels=["tasks", "computers"],
-            computer_cls=BrowserbaseBrowser,
-            operator_cls=Operator
-        )
-
-asyncio.run(service.run())
-```
+The ``meshagent.computers`` package defines abstractions for controlling browsers
+and operating systems and providing these abilities to process-backed agents.
+Computer screenshots can be observed by passing a ``render_screen`` callback to
+``ComputerToolkit``.
 
 ---
 ### Learn more about MeshAgent on our website or check out the docs for additional examples!
