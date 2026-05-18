@@ -20,7 +20,6 @@ class ComputerContext:
         room: RoomClient,
         caller: Participant,
         on_behalf_of: Optional[Participant] = None,
-        caller_context: Optional[Dict[str, Any]] = None,
         event_handler: Optional[Callable[[dict[str, Any]], None]] = None,
         startup_event_factory: Optional[
             Callable[
@@ -32,7 +31,6 @@ class ComputerContext:
         self._room = room
         self._caller = caller
         self._on_behalf_of = on_behalf_of
-        self._caller_context = caller_context
         self._event_handler = event_handler
         self._startup_event_factory = startup_event_factory
         self._last_startup_signature: (
@@ -52,10 +50,6 @@ class ComputerContext:
     @property
     def on_behalf_of(self) -> Optional[Participant]:
         return self._on_behalf_of
-
-    @property
-    def caller_context(self) -> Optional[Dict[str, Any]]:
-        return self._caller_context
 
     @property
     def last_startup_state(self) -> ComputerStartupState | None:

@@ -5,7 +5,13 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Awaitable, Callable, Optional
 
-from meshagent.tools import FunctionTool, LocalRoomTool, Toolkit, ToolContext
+from meshagent.tools import (
+    FunctionTool,
+    LocalRoomTool,
+    RoomToolContext,
+    Toolkit,
+    ToolContext,
+)
 from meshagent.openai.tools.responses_adapter import OpenAIResponsesTool
 from meshagent.api import RoomClient
 
@@ -40,7 +46,6 @@ class ComputerTool(OpenAIResponsesTool):
         title="computer_call",
         description="handle computer tool calls",
         rules=[],
-        thumbnail_url=None,
         render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
         toolkit: "ComputerToolkit",
     ):
@@ -50,7 +55,6 @@ class ComputerTool(OpenAIResponsesTool):
             title=title,
             description=description,
             rules=rules,
-            thumbnail_url=thumbnail_url,
         )
         self.operator = operator
         self.computer = computer
@@ -313,11 +317,17 @@ class ComputerToolkit(Toolkit):
         }
 
     def make_computer_context(self, *, tool_context: ToolContext) -> ComputerContext:
+        room = (
+            tool_context.room
+            if isinstance(tool_context, RoomToolContext)
+            else self.room
+        )
+        if room is None:
+            raise RuntimeError("ComputerToolkit requires a room-backed tool context")
         return ComputerContext(
-            room=self.room,
+            room=room,
             caller=tool_context.caller,
             on_behalf_of=tool_context.on_behalf_of,
-            caller_context=tool_context.caller_context,
             event_handler=tool_context.emit,
             startup_event_factory=lambda state, details: self.make_startup_event(
                 state=state,
