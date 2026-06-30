@@ -39,3 +39,9 @@ def test_check_blocklisted_url_preserves_urlparse_hostname_edges(url: str) -> No
 def test_check_blocklisted_url_raises_urlparse_errors() -> None:
     with pytest.raises(ValueError, match="Invalid IPv6 URL"):
         utils_module.check_blocklisted_url("http://[::1")
+
+
+@pytest.mark.parametrize("value", [None, [], "x", 3])
+def test_sanitize_message_non_dict_inputs_raise_python_get_error(value) -> None:
+    with pytest.raises(AttributeError, match="object has no attribute 'get'"):
+        utils_module.sanitize_message(value)

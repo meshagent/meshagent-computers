@@ -6,9 +6,21 @@ from .computer import ComputerContext
 
 
 async def _async_check_output(*args, **kwargs):
-    proc = await asyncio.create_subprocess_exec(
-        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, **kwargs
-    )
+    shell = kwargs.pop("shell", False)
+    if shell:
+        proc = await asyncio.create_subprocess_shell(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **kwargs,
+        )
+    else:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            **kwargs,
+        )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
         raise subprocess.CalledProcessError(
