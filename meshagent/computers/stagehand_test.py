@@ -202,6 +202,61 @@ def test_stagehand_computer_can_update_config() -> None:
     )
 
 
+def test_stagehand_local_browser_config_uses_python_dict_coercion() -> None:
+    computer = StagehandComputer(
+        stagehand_config=StagehandComputerConfig(
+            browser=[
+                ["metadata", "kept"],
+                ["launchOptions", {"headless": False, "cdpUrl": "old"}],
+            ],  # type: ignore[arg-type]
+        )
+    )
+
+    assert computer._default_local_browser_config(cdp_url="ws://127.0.0.1:1") == {
+        "type": "local",
+        "metadata": "kept",
+        "launchOptions": {
+            "cdpUrl": "ws://127.0.0.1:1",
+            "headless": False,
+            "viewport": {"width": 1440, "height": 900},
+        },
+    }
+
+    string_pair = StagehandComputer(
+        stagehand_config=StagehandComputerConfig(
+            browser=["ab"],  # type: ignore[arg-type]
+        )
+    )
+    assert string_pair._default_local_browser_config(cdp_url="ws://127.0.0.1:2") == {
+        "a": "b",
+        "type": "local",
+        "launchOptions": {
+            "cdpUrl": "ws://127.0.0.1:2",
+            "headless": True,
+            "viewport": {"width": 1440, "height": 900},
+        },
+    }
+
+    malformed = StagehandComputer(
+        stagehand_config=StagehandComputerConfig(
+            browser=["abc"],  # type: ignore[arg-type]
+        )
+    )
+    with pytest.raises(
+        ValueError,
+        match="dictionary update sequence element #0 has length 3; 2 is required",
+    ):
+        malformed._default_local_browser_config(cdp_url="ws://127.0.0.1:3")
+
+    non_iterable = StagehandComputer(
+        stagehand_config=StagehandComputerConfig(
+            browser=1,  # type: ignore[arg-type]
+        )
+    )
+    with pytest.raises(TypeError, match="'int' object is not iterable"):
+        non_iterable._default_local_browser_config(cdp_url="ws://127.0.0.1:4")
+
+
 def test_stagehand_available_requires_local_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
