@@ -244,6 +244,155 @@ async def test_operator_function_call_non_object_arguments_use_python_items_erro
 
 
 @pytest.mark.asyncio
+async def test_operator_function_call_invalid_json_arguments_errors_match_python():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    cases = [
+        ("", "Expecting value: line 1 column 1 \\(char 0\\)"),
+        ("not json", "Expecting value: line 1 column 1 \\(char 0\\)"),
+        ("{", "Expecting property name enclosed in double quotes: line 1 column 2"),
+        ('{"ms":}', "Expecting value: line 1 column 7 \\(char 6\\)"),
+        ('{"ms": 1,}', "Illegal trailing comma before end of object: line 1 column 9"),
+    ]
+
+    for arguments, expected in cases:
+        with pytest.raises(ValueError, match=expected):
+            await operator.play(
+                context,
+                computer=computer,
+                item={
+                    "type": "function_call",
+                    "name": "wait",
+                    "arguments": arguments,
+                    "call_id": "call_invalid_json",
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_operator_function_call_direct_indexing_errors_match_python():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(KeyError, match="name"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "function_call",
+                "arguments": "{}",
+                "call_id": "call_missing_name",
+            },
+        )
+
+    with pytest.raises(KeyError, match="arguments"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "function_call",
+                "name": "wait",
+                "call_id": "call_missing_arguments",
+            },
+        )
+
+    with pytest.raises(
+        TypeError,
+        match="the JSON object must be str, bytes or bytearray, not int",
+    ):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "function_call",
+                "name": "wait",
+                "arguments": 123,
+                "call_id": "call_non_string_arguments",
+            },
+        )
+
+    with pytest.raises(ValueError, match="unsupported computer action: 123"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "function_call",
+                "name": 123,
+                "arguments": "{}",
+                "call_id": "call_non_string_name",
+            },
+        )
+
+    assert (
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": 123,
+                "name": "wait",
+                "arguments": "{}",
+                "call_id": "call_non_string_type",
+            },
+        )
+        == []
+    )
+
+
+@pytest.mark.asyncio
+async def test_operator_play_non_mapping_item_type_errors_match_python():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(TypeError, match="list indices must be integers"):
+        await operator.play(context, computer=computer, item=[])  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="'NoneType' object is not subscriptable"):
+        await operator.play(context, computer=computer, item=None)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="string indices must be integers"):
+        await operator.play(context, computer=computer, item="abc")  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="'int' object is not subscriptable"):
+        await operator.play(context, computer=computer, item=123)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_operator_function_call_missing_call_id_fails_after_action():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(KeyError, match="call_id"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "function_call",
+                "name": "wait",
+                "arguments": "{}",
+            },
+        )
+
+    assert computer.calls == [("wait", {})]
+
+
+@pytest.mark.asyncio
 async def test_operator_treats_missing_pending_safety_checks_as_empty():
     operator = Operator()
     computer = _FakeComputer()
@@ -266,6 +415,110 @@ async def test_operator_treats_missing_pending_safety_checks_as_empty():
     assert computer.calls == [("wait", {})]
     assert outputs[0]["type"] == "computer_call_output"
     assert "acknowledged_safety_checks" not in outputs[0]
+
+
+@pytest.mark.asyncio
+async def test_operator_pending_safety_check_message_indexing_matches_python():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(KeyError, match="message"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "computer_call",
+                "call_id": "call_missing_message",
+                "action": {"type": "wait"},
+                "pending_safety_checks": [{}],
+            },
+        )
+
+    with pytest.raises(TypeError, match="list indices must be integers"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "computer_call",
+                "call_id": "call_list_check",
+                "action": {"type": "wait"},
+                "pending_safety_checks": [[]],
+            },
+        )
+
+    outputs = await operator.play(
+        context,
+        computer=computer,
+        item={
+            "type": "computer_call",
+            "call_id": "call_non_string_message",
+            "action": {"type": "wait"},
+            "pending_safety_checks": [{"message": 123}, {"message": None}],
+        },
+    )
+
+    assert outputs[0]["type"] == "computer_call_output"
+
+
+@pytest.mark.asyncio
+async def test_operator_computer_call_missing_call_id_fails_after_action():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(KeyError, match="call_id"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "computer_call",
+                "action": {"type": "wait"},
+                "pending_safety_checks": [],
+            },
+        )
+
+    assert computer.calls == [("wait", {})]
+
+
+@pytest.mark.asyncio
+async def test_operator_computer_call_action_type_indexing_matches_python():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(KeyError, match="type"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "computer_call",
+                "call_id": "call_missing_action_type",
+                "action": {},
+                "pending_safety_checks": [],
+            },
+        )
+
+    with pytest.raises(ValueError, match="unsupported computer action: 123"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "computer_call",
+                "call_id": "call_non_string_action_type",
+                "action": {"type": 123},
+                "pending_safety_checks": [],
+            },
+        )
 
 
 @pytest.mark.asyncio

@@ -149,6 +149,112 @@ async def test_computer_tool_propagates_computer_startup_events_via_tool_context
 
 
 @pytest.mark.asyncio
+async def test_computer_tool_render_screen_uses_python_lenient_base64_decode():
+    class _OutputOperator:
+        def __init__(self, image_url: str) -> None:
+            self.image_url = image_url
+
+        async def play(
+            self,
+            context: ComputerContext,
+            *,
+            computer: _FakeComputer,
+            item: dict[str, Any],
+        ) -> list[dict]:
+            del context
+            del computer
+            del item
+            return [
+                {
+                    "type": "computer_call_output",
+                    "output": {
+                        "type": "computer_screenshot",
+                        "image_url": self.image_url,
+                    },
+                }
+            ]
+
+    rendered: list[bytes] = []
+    room = _FakeRoom(name="agent")
+    context = ToolContext(caller=room.local_participant)
+
+    for image_url in (
+        "data:image/png;base64,A Q I D",
+        "data:image/png;base64,AQID====",
+        "data:image/png;base64,@@@@",
+        "data:image/png;base64,AQ-ID",
+        "data:image/png;base64,AQ_ID",
+        "data:image/png;base64,=AQID",
+        "data:image/png;base64,AQ=ID",
+    ):
+        toolkit = ComputerToolkit(
+            computer=_FakeComputer(),
+            operator=_OutputOperator(image_url),
+            room=room,
+            render_screen=rendered.append,
+        )
+        computer_tool = next(
+            tool for tool in toolkit.tools if tool.name == "computer_call"
+        )
+
+        await computer_tool.handle_computer_call(
+            context=context,
+            type="computer_call",
+            action={"type": "wait"},
+        )
+
+    assert rendered == [
+        b"\x01\x02\x03",
+        b"\x01\x02\x03",
+        b"",
+        b"\x01\x02\x03",
+        b"\x01\x02\x03",
+        b"\x01\x02\x03",
+        b"\x01\x02\x03",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_computer_tool_render_screen_rejects_non_ascii_base64_like_python():
+    class _OutputOperator:
+        async def play(
+            self,
+            context: ComputerContext,
+            *,
+            computer: _FakeComputer,
+            item: dict[str, Any],
+        ) -> list[dict]:
+            del context
+            del computer
+            del item
+            return [
+                {
+                    "type": "computer_call_output",
+                    "output": {
+                        "type": "computer_screenshot",
+                        "image_url": "data:image/png;base64,AQéID",
+                    },
+                }
+            ]
+
+    room = _FakeRoom(name="agent")
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_OutputOperator(),
+        room=room,
+        render_screen=lambda _: None,
+    )
+    computer_tool = next(tool for tool in toolkit.tools if tool.name == "computer_call")
+
+    with pytest.raises(ValueError, match="string argument should contain only ASCII"):
+        await computer_tool.handle_computer_call(
+            context=ToolContext(caller=room.local_participant),
+            type="computer_call",
+            action={"type": "wait"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_restart_playwright_client_does_not_block_on_stuck_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -487,6 +593,26 @@ def test_computer_toolkit_rejects_starting_url_for_non_playwright_computers():
             room=_FakeRoom(name="agent"),
             starting_url="https://example.com",
         )
+
+
+def test_computer_toolkit_does_not_override_provided_computer_with_blank_starting_url():
+    class _TestComputer(BasePlaywrightComputer):
+        async def _get_browser_and_page(
+            self,
+            context: ComputerContext,
+        ):
+            del context
+            raise AssertionError("not used in this test")
+
+    computer = _TestComputer(starting_url="https://keep.example.test")
+
+    ComputerToolkit(
+        computer=computer,
+        starting_url="   ",
+        render_screen=None,
+    )
+
+    assert computer.starting_url == "https://keep.example.test"
 
 
 def test_computer_toolkit_rejects_unsupported_dimensions():
