@@ -18,9 +18,11 @@ class _FakeComputer:
         self._record_context(context)
         self.calls.append(("wait", {}))
 
-    async def click(self, context: ComputerContext, *, x: int, y: int):
+    async def click(
+        self, context: ComputerContext, *, x: int, y: int, button: str = "left"
+    ):
         self._record_context(context)
-        self.calls.append(("click", {"x": x, "y": y}))
+        self.calls.append(("click", {"x": x, "y": y, "button": button}))
 
     async def double_click(
         self,
@@ -124,7 +126,7 @@ async def test_operator_handles_batched_computer_actions():
 
     assert computer.calls == [
         ("wait", {}),
-        ("click", {"x": 10, "y": 20}),
+        ("click", {"x": 10, "y": 20, "button": "left"}),
     ]
     assert outputs == [
         {
@@ -185,8 +187,60 @@ async def test_operator_ignores_unsupported_action_arguments():
         },
     )
 
-    assert computer.calls == [("click", {"x": 10, "y": 20})]
+    assert computer.calls == [("click", {"x": 10, "y": 20, "button": "left"})]
     assert outputs[0]["type"] == "computer_call_output"
+
+
+@pytest.mark.asyncio
+async def test_operator_function_call_preserves_method_defaults_and_filters_arguments():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    outputs = await operator.play(
+        context,
+        computer=computer,
+        item={
+            "type": "function_call",
+            "name": "click",
+            "arguments": '{"x": 10, "y": 20, "ignored": true}',
+            "call_id": "call_function",
+        },
+    )
+
+    assert computer.calls == [("click", {"x": 10, "y": 20, "button": "left"})]
+    assert outputs == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_function",
+            "output": "success",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_operator_function_call_non_object_arguments_use_python_items_error():
+    operator = Operator()
+    computer = _FakeComputer()
+    context = ComputerContext(
+        room=object(),  # type: ignore[arg-type]
+        caller=object(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(AttributeError, match="'list' object has no attribute 'items'"):
+        await operator.play(
+            context,
+            computer=computer,
+            item={
+                "type": "function_call",
+                "name": "wait",
+                "arguments": "[]",
+                "call_id": "call_function_non_object",
+            },
+        )
 
 
 @pytest.mark.asyncio
