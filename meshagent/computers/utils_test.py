@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 
 from meshagent.computers import utils as utils_module
@@ -45,3 +47,53 @@ def test_check_blocklisted_url_raises_urlparse_errors() -> None:
 def test_sanitize_message_non_dict_inputs_raise_python_get_error(value) -> None:
     with pytest.raises(AttributeError, match="object has no attribute 'get'"):
         utils_module.sanitize_message(value)
+
+
+def test_calculate_image_dimensions_supports_xbm_like_pillow() -> None:
+    xbm = (
+        b"#define sample_width 17\n"
+        b"#define sample_height 9\n"
+        b"static unsigned char sample_bits[] = { 0x00 };\n"
+    )
+    assert utils_module.calculate_image_dimensions(base64.b64encode(xbm).decode()) == (
+        17,
+        9,
+    )
+
+
+def test_calculate_image_dimensions_supports_xpm_like_pillow() -> None:
+    xpm = (
+        b"/* XPM */\n"
+        b"static char * sample[] = {\n"
+        b'"13 7 1 1",\n'
+        b'"a c #000000",\n'
+        b'"aaaaaaaaaaaaa",\n'
+        b'"aaaaaaaaaaaaa",\n'
+        b'"aaaaaaaaaaaaa",\n'
+        b'"aaaaaaaaaaaaa",\n'
+        b'"aaaaaaaaaaaaa",\n'
+        b'"aaaaaaaaaaaaa",\n'
+        b'"aaaaaaaaaaaaa"};\n'
+    )
+    assert utils_module.calculate_image_dimensions(base64.b64encode(xpm).decode()) == (
+        13,
+        7,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bytes([0, 0, 1, 0, 1, 0, 16, 10, 0, 0, 1, 0, 32, 0, 4, 0, 0, 0, 22, 0, 0, 0])
+        + b"abcd",
+        bytes([0, 0, 2, 0, 1, 0, 16, 10, 0, 0, 1, 0, 32, 0, 4, 0, 0, 0, 22, 0, 0, 0])
+        + b"abcd",
+        bytes([0, 0, 1, 0, 1, 0, 16, 10, 0, 0, 1, 0, 32, 0, 4, 0, 0, 0, 100, 0, 0, 0])
+        + b"abcd",
+    ],
+)
+def test_calculate_image_dimensions_rejects_invalid_ico_payloads_like_pillow(
+    payload: bytes,
+) -> None:
+    with pytest.raises(Exception):
+        utils_module.calculate_image_dimensions(base64.b64encode(payload).decode())
