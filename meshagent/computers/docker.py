@@ -63,8 +63,8 @@ class DockerComputer:
             )
 
         # Fetch display geometry
-        geometry = await self._exec(
-            f"DISPLAY={self.display} xdotool getdisplaygeometry"
+        geometry = (
+            await self._exec(f"DISPLAY={self.display} xdotool getdisplaygeometry")
         ).strip()
         if geometry:
             w, h = geometry.split()
