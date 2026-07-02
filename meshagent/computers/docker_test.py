@@ -147,3 +147,21 @@ async def test_docker_computer_commands_match_python_source(monkeypatch) -> None
             {"shell": True},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_docker_computer_unsupported_url_methods_raise_runtime_error() -> None:
+    computer = DockerComputer()
+
+    with pytest.raises(
+        RuntimeError, match="get_current_url is not supported by DockerComputer"
+    ):
+        await computer.get_current_url(context=object())
+    with pytest.raises(RuntimeError, match="goto is not supported by DockerComputer"):
+        await computer.goto(context=object(), url="https://example.test")
+    with pytest.raises(RuntimeError, match="back is not supported by DockerComputer"):
+        await computer.back(context=object())
+    with pytest.raises(
+        RuntimeError, match="forward is not supported by DockerComputer"
+    ):
+        await computer.forward(context=object())
