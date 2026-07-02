@@ -43,6 +43,20 @@ class _FakeRoom:
         self.local_participant = _FakeParticipant(name=name)
 
 
+class _FakeStorage:
+    def __init__(self) -> None:
+        self.uploads: list[dict[str, Any]] = []
+
+    async def upload(self, **kwargs: Any) -> None:
+        self.uploads.append(kwargs)
+
+
+class _FakeRoomWithStorage(_FakeRoom):
+    def __init__(self, name: str):
+        super().__init__(name=name)
+        self.storage = _FakeStorage()
+
+
 class _FakeOperator:
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
@@ -392,6 +406,124 @@ async def test_computer_tool_startup_failure_event_matches_python_suppression():
             )
 
         assert [event["state"] for event in events] == expected_states
+
+
+@pytest.mark.asyncio
+async def test_screenshot_tool_execute_matches_python_side_effects():
+    class _ScreenshotComputer(_FakeComputer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.screenshot_calls: list[dict[str, Any]] = []
+
+        async def screenshot_bytes(
+            self,
+            context: ComputerContext,
+            *,
+            full_page: bool,
+        ) -> bytes:
+            self.screenshot_calls.append(
+                {"context": context, "full_page": full_page},
+            )
+            return b"png-bytes"
+
+    computer = _ScreenshotComputer()
+    room = _FakeRoomWithStorage(name="agent")
+    toolkit = ComputerToolkit(
+        computer=computer,
+        operator=_FakeOperator(),
+        room=room,
+        render_screen=None,
+    )
+    events: list[dict[str, Any]] = []
+    context = ToolContext(caller=room.local_participant, event_handler=events.append)
+    tool = agent_module.ScreenshotTool(
+        room=room,
+        computer=computer,
+        toolkit=toolkit,
+    )
+
+    result = await tool.execute(context=context, save_path="screen.png", full_page=True)
+
+    assert result == "saved screenshot to screen.png"
+    assert len(computer.enter_contexts) == 1
+    assert computer.screenshot_calls == [
+        {"context": computer.enter_contexts[0], "full_page": True},
+    ]
+    assert room.storage.uploads == [
+        {"path": "screen.png", "data": b"png-bytes", "overwrite": True},
+    ]
+    assert [event["state"] for event in events] == ["in_progress", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_goto_tool_execute_matches_python_navigation_and_rendering():
+    class _GotoComputer(_FakeComputer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.goto_calls: list[dict[str, Any]] = []
+            self.screenshot_calls: list[dict[str, Any]] = []
+
+        async def goto(
+            self,
+            context: ComputerContext,
+            *,
+            url: str,
+        ) -> None:
+            self.goto_calls.append({"context": context, "url": url})
+
+        async def screenshot_bytes(
+            self,
+            context: ComputerContext,
+            *,
+            full_page: bool,
+        ) -> bytes:
+            self.screenshot_calls.append(
+                {"context": context, "full_page": full_page},
+            )
+            return b"rendered-png"
+
+    computer = _GotoComputer()
+    room = _FakeRoom(name="agent")
+    rendered: list[bytes] = []
+    render_called = asyncio.Event()
+
+    async def render_screen(data: bytes) -> None:
+        rendered.append(data)
+        render_called.set()
+
+    toolkit = ComputerToolkit(
+        computer=computer,
+        operator=_FakeOperator(),
+        room=room,
+        render_screen=render_screen,
+    )
+    events: list[dict[str, Any]] = []
+    context = ToolContext(caller=room.local_participant, event_handler=events.append)
+    tool = agent_module.GotoURL(
+        computer=computer,
+        toolkit=toolkit,
+        render_screen=render_screen,
+    )
+
+    result = await tool.execute(context=context, url="example.test/path")
+
+    assert result is None
+    assert render_called.is_set()
+    assert rendered == [b"rendered-png"]
+    assert len(computer.enter_contexts) == 1
+    assert computer.goto_calls == [
+        {
+            "context": computer.enter_contexts[0],
+            "url": "https://example.test/path",
+        },
+    ]
+    assert computer.screenshot_calls == [
+        {"context": computer.enter_contexts[0], "full_page": False},
+    ]
+    assert [event["state"] for event in events] == ["in_progress", "completed"]
+
+    await tool.execute(context=context, url="http://example.test/next")
+    assert computer.goto_calls[-1]["url"] == "http://example.test/next"
 
 
 @pytest.mark.asyncio
