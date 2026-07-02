@@ -350,7 +350,7 @@ async def test_container_playwright_uses_custom_starting_url() -> None:
     computer = ContainerPlaywrightComputer(
         room=room,
         headless=True,
-        starting_url="https://example.com",
+        starting_url="  https://example.com  ",
     )
 
     async def _ensure_container(context: ComputerContext) -> str:
@@ -378,7 +378,7 @@ async def test_container_playwright_uses_custom_starting_url() -> None:
     assert connected_browser is browser
     assert connected_page is page
     assert page.viewport_calls == [{"width": 1440, "height": 900}]
-    assert page.goto_calls == ["https://example.com"]
+    assert page.goto_calls == ["  https://example.com  "]
 
 
 @pytest.mark.asyncio

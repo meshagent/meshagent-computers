@@ -7,7 +7,7 @@ from meshagent.computers import agent as agent_module
 from meshagent.computers import base_playwright as base_playwright_module
 from meshagent.computers.agent import ComputerToolkit
 from meshagent.computers.base_playwright import BasePlaywrightComputer
-from meshagent.computers.computer import ComputerContext
+from meshagent.computers.computer import Computer, ComputerContext
 from meshagent.tools import ToolContext
 
 
@@ -121,6 +121,148 @@ def test_computer_context_emit_invokes_event_handler_like_python():
     ComputerContext(room=room, caller=room.local_participant).emit({"ignored": True})
 
     assert events == [event]
+
+
+def test_computer_context_startup_events_match_python_dedupe_and_details():
+    events: list[dict[str, Any]] = []
+    room = _FakeRoom(name="agent")
+
+    def make_startup_event(state: str, details: tuple[str, ...]) -> dict[str, Any]:
+        return {"type": "startup", "state": state, "details": list(details)}
+
+    context = ComputerContext(
+        room=room,
+        caller=room.local_participant,
+        event_handler=events.append,
+        startup_event_factory=make_startup_event,
+    )
+
+    assert context.room is room
+    assert context.caller is room.local_participant
+    assert context.on_behalf_of is None
+    assert context.last_startup_state is None
+    assert context.last_startup_details == ()
+
+    context.emit_startup(state="queued", details=[" one ", "", 7, "two"])  # type: ignore[list-item]
+    context.emit_startup(state="queued", details=("one", "two"))
+    context.emit_startup(state="in_progress")
+
+    assert events == [
+        {"type": "startup", "state": "queued", "details": ["one", "two"]},
+        {"type": "startup", "state": "in_progress", "details": []},
+    ]
+    assert context.last_startup_state == "in_progress"
+    assert context.last_startup_details == ()
+
+    no_factory = ComputerContext(room=room, caller=room.local_participant)
+    no_factory.emit_startup(state="completed", details=["ignored"])
+    assert no_factory.last_startup_state is None
+    assert no_factory.last_startup_details == ()
+
+
+@pytest.mark.asyncio
+async def test_computer_protocol_default_context_manager_returns_self() -> None:
+    class _DefaultContextManagerComputer(Computer):
+        environment = "browser"
+        dimensions = (1, 1)
+
+    computer = _DefaultContextManagerComputer()
+
+    assert await computer.__aenter__(object()) is computer  # type: ignore[arg-type]
+    assert (
+        await computer.__aexit__(Exception, Exception("boom"), object())  # type: ignore[arg-type]
+        is computer
+    )
+
+
+def test_base_playwright_constructor_helpers_match_python_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert base_playwright_module._parse_dimensions("") is None  # noqa: SLF001
+    assert base_playwright_module._parse_dimensions(" 1440x900 ") == (  # noqa: SLF001
+        1440,
+        900,
+    )
+    assert base_playwright_module._parse_dimensions("1440X900") == (  # noqa: SLF001
+        1440,
+        900,
+    )
+    assert base_playwright_module._parse_dimensions("1600, 900") == (  # noqa: SLF001
+        1600,
+        900,
+    )
+    assert base_playwright_module._parse_dimensions("1600:900") is None  # noqa: SLF001
+    assert base_playwright_module._parse_dimensions("1x2x3") is None  # noqa: SLF001
+    assert base_playwright_module._parse_dimensions("1,2,3") is None  # noqa: SLF001
+    assert base_playwright_module._parse_dimensions("wide x 900") is None  # noqa: SLF001
+
+    monkeypatch.delenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", raising=False)
+    assert base_playwright_module._resolve_playwright_dimensions() == (  # noqa: SLF001
+        1440,
+        900,
+    )
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", "1600x900")
+    assert base_playwright_module._resolve_playwright_dimensions() == (  # noqa: SLF001
+        1600,
+        900,
+    )
+    monkeypatch.setenv("MESHAGENT_PLAYWRIGHT_DIMENSIONS", "1200x800")
+    assert base_playwright_module._resolve_playwright_dimensions() == (  # noqa: SLF001
+        1440,
+        900,
+    )
+
+    default_computer = BasePlaywrightComputer(starting_url=" ")
+    assert default_computer.dimensions == (1440, 900)
+    assert default_computer.starting_url == "https://google.com"
+    custom_computer = BasePlaywrightComputer(
+        dimensions=(1600, 900),
+        starting_url="  https://example.test  ",
+    )
+    assert custom_computer.dimensions == (1600, 900)
+    assert custom_computer.starting_url == "  https://example.test  "
+    with pytest.raises(
+        ValueError,
+        match=r"playwright dimensions must be one of: \(1440, 900\), \(1600, 900\)",
+    ):
+        BasePlaywrightComputer(dimensions=(1200, 800))
+
+    for input_key, expected in [
+        ("/", "Divide"),
+        ("\\", "Backslash"),
+        ("alt", "Alt"),
+        ("arrowdown", "ArrowDown"),
+        ("arrowleft", "ArrowLeft"),
+        ("arrowright", "ArrowRight"),
+        ("arrowup", "ArrowUp"),
+        ("backspace", "Backspace"),
+        ("capslock", "CapsLock"),
+        ("cmd", "Meta"),
+        ("ctrl", "Control"),
+        ("delete", "Delete"),
+        ("end", "End"),
+        ("enter", "Enter"),
+        ("esc", "Escape"),
+        ("home", "Home"),
+        ("insert", "Insert"),
+        ("option", "Alt"),
+        ("pagedown", "PageDown"),
+        ("pageup", "PageUp"),
+        ("shift", "Shift"),
+        ("space", " "),
+        ("super", "Meta"),
+        ("tab", "Tab"),
+        ("win", "Meta"),
+        ("CTRL", "Control"),
+        ("A", "A"),
+    ]:
+        assert (
+            base_playwright_module.CUA_KEY_TO_PLAYWRIGHT_KEY.get(
+                input_key.lower(),
+                input_key,
+            )
+            == expected
+        )
 
 
 @pytest.mark.asyncio

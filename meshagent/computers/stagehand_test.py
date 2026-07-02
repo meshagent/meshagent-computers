@@ -126,7 +126,7 @@ async def test_stagehand_computer_uses_room_runtime_for_local_stagehand(
 
     computer = StagehandComputer(
         dimensions=(1600, 900),
-        starting_url="https://example.com",
+        starting_url="  https://example.com  ",
     )
     computer._playwright = SimpleNamespace(chromium=chromium)
 
@@ -151,7 +151,7 @@ async def test_stagehand_computer_uses_room_runtime_for_local_stagehand(
     assert page.viewport_calls == [{"width": 1600, "height": 900}]
     assert page.goto_calls == [
         ("about:blank", "domcontentloaded"),
-        ("https://example.com", None),
+        ("  https://example.com  ", None),
     ]
 
     assert len(_FakeStagehand.init_calls) == 1
