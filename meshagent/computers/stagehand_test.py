@@ -61,6 +61,41 @@ class _FakeChromium:
         return self.browser
 
 
+class _FakeRemoteBrowserContext:
+    def __init__(self, page: _FakePage | None = None) -> None:
+        self.pages = [] if page is None else [page]
+        self.new_context_calls: list[dict[str, object]] = []
+        self.new_page_calls = 0
+        self.page = page or _FakePage()
+
+    async def new_page(self) -> _FakePage:
+        self.new_page_calls += 1
+        self.pages.append(self.page)
+        return self.page
+
+
+class _FakeRemoteBrowser:
+    def __init__(self, context: _FakeRemoteBrowserContext | None = None) -> None:
+        self.contexts = [] if context is None else [context]
+        self.context = context or _FakeRemoteBrowserContext()
+        self.new_context_calls: list[dict[str, object]] = []
+
+    async def new_context(self, **kwargs) -> _FakeRemoteBrowserContext:
+        self.new_context_calls.append(kwargs)
+        self.contexts.append(self.context)
+        return self.context
+
+
+class _FakeRemoteChromium:
+    def __init__(self, browser: _FakeRemoteBrowser) -> None:
+        self.browser = browser
+        self.connect_calls: list[dict[str, object]] = []
+
+    async def connect_over_cdp(self, cdp_url: str, **kwargs):
+        self.connect_calls.append({"cdp_url": cdp_url, **kwargs})
+        return self.browser
+
+
 class _FakeStagehandSessions:
     def __init__(self) -> None:
         self.start_calls: list[dict[str, object]] = []
@@ -186,6 +221,67 @@ async def test_stagehand_computer_uses_room_runtime_for_local_stagehand(
     await computer.__aexit__(None, None, None)
     assert stagehand.sessions.end_calls == ["stagehand_session_1"]
     assert stagehand.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stagehand_computer_remote_session_plan_matches_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FakeStagehand.init_calls.clear()
+    remote_browser = _FakeRemoteBrowser()
+    chromium = _FakeRemoteChromium(browser=remote_browser)
+
+    monkeypatch.setattr(
+        stagehand_module, "_require_stagehand_class", lambda: _FakeStagehand
+    )
+    monkeypatch.setattr(
+        stagehand_module,
+        "stagehand_available",
+        lambda **_: True,
+    )
+
+    computer = StagehandComputer(
+        dimensions=(1600, 900),
+        starting_url="https://remote.example",
+        stagehand_config=StagehandComputerConfig(
+            server="remote",
+            browser={"type": "browserbase"},
+        ),
+    )
+    computer._playwright = SimpleNamespace(chromium=chromium)
+
+    browser, page = await computer._get_browser_and_page(_make_context())
+
+    assert browser is remote_browser
+    assert page is remote_browser.context.page
+    assert chromium.connect_calls == [
+        {
+            "cdp_url": "ws://127.0.0.1:9222/devtools/browser/example",
+            "timeout": 60_000,
+        }
+    ]
+    assert remote_browser.new_context_calls == [
+        {"viewport": {"width": 1600, "height": 900}}
+    ]
+    assert remote_browser.context.new_page_calls == 1
+    assert page.viewport_calls == [{"width": 1600, "height": 900}]
+    assert page.goto_calls == [("https://remote.example", None)]
+
+    assert len(_FakeStagehand.init_calls) == 1
+    init_call = _FakeStagehand.init_calls[0]
+    assert init_call["server"] == "remote"
+    assert init_call["model_api_key"] == "room_token"
+    assert init_call["local_openai_api_key"] == "room_token"
+
+    stagehand = computer._stagehand
+    assert isinstance(stagehand, _FakeStagehand)
+    assert stagehand.sessions.start_calls == [
+        {
+            "model_name": "openai/gpt-5.4",
+            "browser": {"type": "browserbase"},
+        }
+    ]
+    assert computer._stagehand_session_id == "stagehand_session_1"
 
 
 def test_stagehand_computer_can_update_config() -> None:
