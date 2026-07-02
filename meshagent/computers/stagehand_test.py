@@ -202,6 +202,49 @@ def test_stagehand_computer_can_update_config() -> None:
     )
 
 
+def test_stagehand_start_kwargs_and_update_conflict_match_python() -> None:
+    computer = StagehandComputer(
+        stagehand_config=StagehandComputerConfig(
+            model_name="openai/custom",
+            browserbase_session_create_params={"keepAlive": True},
+            browserbase_session_id="session-1",
+            dom_settle_timeout_ms=1234.0,
+            experimental=True,
+            self_heal=False,
+            system_prompt="system",
+            verbose=2,
+        )
+    )
+
+    assert computer._runtime_stagehand_start_kwargs(browser={"type": "remote"}) == {
+        "model_name": "openai/custom",
+        "browser": {"type": "remote"},
+        "browserbase_session_create_params": {"keepAlive": True},
+        "browserbase_session_id": "session-1",
+        "dom_settle_timeout_ms": 1234.0,
+        "experimental": True,
+        "self_heal": False,
+        "system_prompt": "system",
+        "verbose": 2,
+    }
+    assert computer._runtime_stagehand_start_kwargs(browser=None) == {
+        "model_name": "openai/custom",
+        "browserbase_session_create_params": {"keepAlive": True},
+        "browserbase_session_id": "session-1",
+        "dom_settle_timeout_ms": 1234.0,
+        "experimental": True,
+        "self_heal": False,
+        "system_prompt": "system",
+        "verbose": 2,
+    }
+
+    with pytest.raises(ValueError, match="pass config or keyword changes, not both"):
+        computer.update_stagehand_config(
+            config=StagehandComputerConfig(),
+            model_name="openai/other",
+        )
+
+
 def test_stagehand_local_browser_config_uses_python_dict_coercion() -> None:
     computer = StagehandComputer(
         stagehand_config=StagehandComputerConfig(

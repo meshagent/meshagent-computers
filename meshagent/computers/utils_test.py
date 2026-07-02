@@ -11,7 +11,10 @@ from meshagent.computers import utils as utils_module
         "https://maliciousbook.com",
         "https://login.maliciousbook.com/path",
         "https://evilvideos.com/watch?v=1",
+        "https://EVILVIDEOS.COM/watch?v=1",
         "https://user:pass@evilvideos.com:443/path",
+        "https://user@sub.ilanbigio.com/path",
+        "https://evilvideos.com:bad/path",
         "//evilvideos.com/path",
     ],
 )
