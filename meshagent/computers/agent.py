@@ -45,7 +45,7 @@ class ComputerTool(OpenAIResponsesTool):
         computer: Computer,
         title="computer_call",
         description="handle computer tool calls",
-        rules=[],
+        rules: Optional[list[str]] = None,
         render_screen: Optional[Callable[[bytes], Awaitable[None] | None]] = None,
         toolkit: "ComputerToolkit",
     ):
@@ -54,7 +54,7 @@ class ComputerTool(OpenAIResponsesTool):
             # TODO: give a correct schema
             title=title,
             description=description,
-            rules=rules,
+            rules=[] if rules is None else rules,
         )
         self.operator = operator
         self.computer = computer

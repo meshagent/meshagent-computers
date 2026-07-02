@@ -67,6 +67,46 @@ def test_computer_toolkit_has_no_default_render_screen():
     assert toolkit.render_screen is None
 
 
+def test_computer_tool_does_not_share_default_rules_list():
+    first = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+    )
+    second = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+    )
+    first_tool = next(tool for tool in first.tools if tool.name == "computer_call")
+    second_tool = next(tool for tool in second.tools if tool.name == "computer_call")
+
+    first_tool.rules.append("first only")
+
+    assert first_tool.rules == ["first only"]
+    assert second_tool.rules == []
+
+
+def test_computer_tool_preserves_explicit_rules_list_reference():
+    rules: list[str] = []
+    toolkit = ComputerToolkit(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        room=_FakeRoom(name="agent"),
+    )
+    tool = type(next(tool for tool in toolkit.tools if tool.name == "computer_call"))(
+        computer=_FakeComputer(),
+        operator=_FakeOperator(),
+        toolkit=toolkit,
+        rules=rules,
+    )
+
+    rules.append("later")
+
+    assert tool.rules is rules
+    assert tool.rules == ["later"]
+
+
 @pytest.mark.asyncio
 async def test_computer_tool_emits_startup_progress_events():
     computer = _FakeComputer()
