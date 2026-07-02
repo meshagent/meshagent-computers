@@ -107,6 +107,22 @@ def test_computer_tool_preserves_explicit_rules_list_reference():
     assert tool.rules == ["later"]
 
 
+def test_computer_context_emit_invokes_event_handler_like_python():
+    events: list[dict[str, Any]] = []
+    room = _FakeRoom(name="agent")
+    context = ComputerContext(
+        room=room,
+        caller=room.local_participant,
+        event_handler=events.append,
+    )
+
+    event = {"type": "custom", "nested": {"value": 1}}
+    context.emit(event)
+    ComputerContext(room=room, caller=room.local_participant).emit({"ignored": True})
+
+    assert events == [event]
+
+
 @pytest.mark.asyncio
 async def test_computer_tool_emits_startup_progress_events():
     computer = _FakeComputer()
@@ -186,6 +202,54 @@ async def test_computer_tool_propagates_computer_startup_events_via_tool_context
     assert events[1]["state"] == "in_progress"
     assert events[1]["details"] == ["Waiting for Playwright container to become ready."]
     assert events[2]["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_computer_tool_startup_failure_event_matches_python_suppression():
+    class _FailingComputer(_FakeComputer):
+        def __init__(self, emitted_state: str | None) -> None:
+            super().__init__()
+            self.emitted_state = emitted_state
+
+        async def __aenter__(
+            self,
+            context: ComputerContext,
+        ):
+            self.enter_contexts.append(context)
+            if self.emitted_state is not None:
+                context.emit_startup(state=self.emitted_state)
+            raise RuntimeError("boom")
+
+    for emitted_state, expected_states in (
+        (None, ["in_progress", "failed"]),
+        ("failed", ["in_progress", "failed"]),
+        ("cancelled", ["in_progress", "cancelled"]),
+    ):
+        computer = _FailingComputer(emitted_state=emitted_state)
+        room = _FakeRoom(name="agent")
+        toolkit = ComputerToolkit(
+            computer=computer,
+            operator=_FakeOperator(),
+            room=room,
+            render_screen=None,
+        )
+        events: list[dict[str, Any]] = []
+        context = ToolContext(
+            caller=room.local_participant,
+            event_handler=events.append,
+        )
+
+        computer_tool = next(
+            tool for tool in toolkit.tools if tool.name == "computer_call"
+        )
+        with pytest.raises(RuntimeError, match="boom"):
+            await computer_tool.handle_computer_call(
+                context=context,
+                type="computer_call",
+                action={"type": "wait"},
+            )
+
+        assert [event["state"] for event in events] == expected_states
 
 
 @pytest.mark.asyncio
