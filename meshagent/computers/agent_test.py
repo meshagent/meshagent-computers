@@ -1052,7 +1052,7 @@ async def test_restart_playwright_client_does_not_block_on_stuck_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_base_playwright_route_callback_aborts_blocked_domains_like_rust(
+async def test_base_playwright_route_callback_aborts_blocked_domains_like_python_source(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
