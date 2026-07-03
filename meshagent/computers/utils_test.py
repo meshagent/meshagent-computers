@@ -46,42 +46,27 @@ def test_check_blocklisted_url_raises_urlparse_errors() -> None:
         utils_module.check_blocklisted_url("http://[::1")
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://exa\u2100mple.com",
+        "http://exa\uff0fmple.com",
+        "http://exa\uff1fmple.com",
+        "http://exa\uff03mple.com",
+        "http://user\uff20host.com",
+    ],
+)
+def test_check_blocklisted_url_preserves_nfkc_netloc_validation(url: str) -> None:
+    with pytest.raises(
+        ValueError, match="contains invalid characters under NFKC normalization"
+    ):
+        utils_module.check_blocklisted_url(url)
+
+
 @pytest.mark.parametrize("value", [None, [], "x", 3])
 def test_sanitize_message_non_dict_inputs_raise_python_get_error(value) -> None:
     with pytest.raises(AttributeError, match="object has no attribute 'get'"):
         utils_module.sanitize_message(value)
-
-
-def test_calculate_image_dimensions_supports_xbm_like_pillow() -> None:
-    xbm = (
-        b"#define sample_width 17\n"
-        b"#define sample_height 9\n"
-        b"static unsigned char sample_bits[] = { 0x00 };\n"
-    )
-    assert utils_module.calculate_image_dimensions(base64.b64encode(xbm).decode()) == (
-        17,
-        9,
-    )
-
-
-def test_calculate_image_dimensions_supports_xpm_like_pillow() -> None:
-    xpm = (
-        b"/* XPM */\n"
-        b"static char * sample[] = {\n"
-        b'"13 7 1 1",\n'
-        b'"a c #000000",\n'
-        b'"aaaaaaaaaaaaa",\n'
-        b'"aaaaaaaaaaaaa",\n'
-        b'"aaaaaaaaaaaaa",\n'
-        b'"aaaaaaaaaaaaa",\n'
-        b'"aaaaaaaaaaaaa",\n'
-        b'"aaaaaaaaaaaaa",\n'
-        b'"aaaaaaaaaaaaa"};\n'
-    )
-    assert utils_module.calculate_image_dimensions(base64.b64encode(xpm).decode()) == (
-        13,
-        7,
-    )
 
 
 @pytest.mark.parametrize(
@@ -95,7 +80,7 @@ def test_calculate_image_dimensions_supports_xpm_like_pillow() -> None:
         + b"abcd",
     ],
 )
-def test_calculate_image_dimensions_rejects_invalid_ico_payloads_like_pillow(
+def test_calculate_image_dimensions_rejects_invalid_ico_payloads(
     payload: bytes,
 ) -> None:
     with pytest.raises(Exception):

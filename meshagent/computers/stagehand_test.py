@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from dataclasses import asdict
 
 from meshagent.computers import stagehand as stagehand_module
 from meshagent.computers.computer import ComputerContext
@@ -298,6 +300,32 @@ def test_stagehand_computer_can_update_config() -> None:
     )
 
 
+def test_stagehand_config_defaults_match_python_dataclass() -> None:
+    assert asdict(StagehandComputerConfig()) == {
+        "model_name": "openai/gpt-5.4",
+        "server": "local",
+        "browserbase_api_key": None,
+        "browserbase_project_id": None,
+        "browser": None,
+        "browserbase_session_create_params": None,
+        "browserbase_session_id": None,
+        "dom_settle_timeout_ms": None,
+        "experimental": None,
+        "self_heal": None,
+        "system_prompt": None,
+        "verbose": None,
+        "local_host": "127.0.0.1",
+        "local_port": 0,
+        "local_headless": True,
+        "local_chromium_sandbox": False,
+        "local_chrome_path": None,
+        "local_ready_timeout_s": 30.0,
+        "local_shutdown_on_close": True,
+        "timeout": None,
+        "max_retries": 2,
+    }
+
+
 def test_stagehand_start_kwargs_and_update_conflict_match_python() -> None:
     computer = StagehandComputer(
         stagehand_config=StagehandComputerConfig(
@@ -394,6 +422,117 @@ def test_stagehand_local_browser_config_uses_python_dict_coercion() -> None:
     )
     with pytest.raises(TypeError, match="'int' object is not iterable"):
         non_iterable._default_local_browser_config(cdp_url="ws://127.0.0.1:4")
+
+
+def test_stagehand_platform_path_and_url_helpers_match_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stagehand_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(stagehand_module.platform, "machine", lambda: "x86_64")
+    assert stagehand_module._playwright_host_platform() == "linux-x64"  # noqa: SLF001
+
+    monkeypatch.setattr(stagehand_module.platform, "machine", lambda: "aarch64")
+    assert stagehand_module._playwright_host_platform() == "linux-arm64"  # noqa: SLF001
+
+    monkeypatch.setattr(stagehand_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(stagehand_module.platform, "machine", lambda: "arm64")
+    assert stagehand_module._playwright_host_platform() == "mac-arm64"  # noqa: SLF001
+
+    monkeypatch.setattr(stagehand_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(stagehand_module.platform, "machine", lambda: "arm64")
+    assert stagehand_module._playwright_host_platform() == "win-x64"  # noqa: SLF001
+
+    monkeypatch.setattr(stagehand_module.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(stagehand_module.platform, "machine", lambda: "riscv64")
+    assert stagehand_module._playwright_host_platform() is None  # noqa: SLF001
+
+    monkeypatch.setattr(
+        stagehand_module,
+        "_PLAYWRIGHT_BROWSERS_JSON_PATH",
+        Path("/repo/playwright/driver/package/browsers.json"),
+    )
+    monkeypatch.setattr(stagehand_module.Path, "home", lambda *args: Path("/home/me"))
+    monkeypatch.setenv("HOME", "/home/me")
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "0")
+    assert stagehand_module._playwright_registry_directory() == Path(  # noqa: SLF001
+        "/repo/playwright/.local-browsers"
+    )
+
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "~/pw")
+    assert stagehand_module._playwright_registry_directory() == Path(  # noqa: SLF001
+        "/home/me/pw"
+    )
+
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", "~/cache")
+    assert stagehand_module._playwright_registry_directory() == Path(  # noqa: SLF001
+        "/home/me/cache/ms-playwright"
+    )
+
+    monkeypatch.setattr(stagehand_module.platform, "system", lambda: "Darwin")
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    assert stagehand_module._playwright_registry_directory() == Path(  # noqa: SLF001
+        "/home/me/Library/Caches/ms-playwright"
+    )
+
+    monkeypatch.setattr(stagehand_module.platform, "system", lambda: "Plan9")
+    with pytest.raises(
+        RuntimeError,
+        match="unsupported platform for Playwright registry: Plan9",
+    ):
+        stagehand_module._playwright_registry_directory()  # noqa: SLF001
+
+    monkeypatch.setenv("CHROME_PATH", "/env/chrome")
+    assert (  # noqa: SLF001
+        stagehand_module._effective_local_chrome_path(
+            local_chrome_path=" /custom/chrome "
+        )
+        == " /custom/chrome "
+    )
+    assert (  # noqa: SLF001
+        stagehand_module._effective_local_chrome_path(local_chrome_path=" ")
+        == "/env/chrome"
+    )
+
+    local_headless_names: list[str] = []
+
+    def fake_managed_browser_path(*, browser_name: str):
+        local_headless_names.append(browser_name)
+        return None
+
+    monkeypatch.delenv("CHROME_PATH", raising=False)
+    monkeypatch.setattr(
+        stagehand_module,
+        "_playwright_managed_browser_executable_path",
+        fake_managed_browser_path,
+    )
+    assert (
+        stagehand_module._playwright_local_browser_available(  # noqa: SLF001
+            local_headless=True,
+            local_chrome_path=None,
+        )
+        is False
+    )
+    assert (
+        stagehand_module._playwright_local_browser_available(  # noqa: SLF001
+            local_headless=False,
+            local_chrome_path=None,
+        )
+        is False
+    )
+    assert local_headless_names == ["chromium-headless-shell", "chromium"]
+
+    room = _FakeRoom()
+    room.room_url = "ws://localhost:8080/rooms/test/"
+    assert (
+        stagehand_module._room_openai_base_url(room=room)  # noqa: SLF001
+        == "http://localhost:8080/rooms/test/openai/v1"
+    )
+    room.room_url = "wss://example.test/rooms/test"
+    assert (
+        stagehand_module._room_openai_base_url(room=room)  # noqa: SLF001
+        == "https://example.test/rooms/test/openai/v1"
+    )
 
 
 def test_stagehand_available_requires_local_browser(

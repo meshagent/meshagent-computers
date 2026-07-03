@@ -213,7 +213,7 @@ class DockerComputer:
             return
         start_x = path[0]["x"]
         start_y = path[0]["y"]
-        self._exec(
+        await self._exec(
             f"DISPLAY={self.display} xdotool mousemove {start_x} {start_y} mousedown 1"
         )
         for point in path[1:]:

@@ -7,8 +7,9 @@ from meshagent.computers.docker import DockerComputer, _async_check_output
 
 
 @pytest.mark.asyncio
-async def test_async_check_output_shell_executes_and_preserves_failure_fields():
+async def test_async_check_output_shell_and_exec_preserve_failure_fields():
     assert await _async_check_output("printf stdout", shell=True) == b"stdout"
+    assert await _async_check_output("printf", "stdout") == b"stdout"
 
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
         await _async_check_output(
@@ -21,6 +22,19 @@ async def test_async_check_output_shell_executes_and_preserves_failure_fields():
     assert exc.cmd == ("printf stdout; printf stderr >&2; exit 7",)
     assert exc.output == b"stdout"
     assert exc.stderr == b"stderr"
+
+    with pytest.raises(subprocess.CalledProcessError) as exec_exc_info:
+        await _async_check_output(
+            "sh",
+            "-c",
+            "printf stdout; printf stderr >&2; exit 7",
+        )
+
+    exec_exc = exec_exc_info.value
+    assert exec_exc.returncode == 7
+    assert exec_exc.cmd == ("sh", "-c", "printf stdout; printf stderr >&2; exit 7")
+    assert exec_exc.output == b"stdout"
+    assert exec_exc.stderr == b"stderr"
 
 
 @pytest.mark.asyncio
@@ -98,6 +112,8 @@ async def test_docker_computer_commands_match_python_source(monkeypatch) -> None
     await computer.type(context=object(), text="don't")
     await computer.move(context=object(), x=5, y=6)
     await computer.keypress(context=object(), keys=["ENTER", "SPACE", "x"])
+    await computer.drag(context=object(), path=[])
+    await computer.drag(context=object(), path=[{"x": 1, "y": 2}, {"x": 3, "y": 4}])
 
     assert calls == [
         (
@@ -144,6 +160,20 @@ async def test_docker_computer_commands_match_python_source(monkeypatch) -> None
             (
                 'docker exec cua-sample-app sh -c "DISPLAY=:99 xdotool key Return+space+x"',
             ),
+            {"shell": True},
+        ),
+        (
+            (
+                'docker exec cua-sample-app sh -c "DISPLAY=:99 xdotool mousemove 1 2 mousedown 1"',
+            ),
+            {"shell": True},
+        ),
+        (
+            ('docker exec cua-sample-app sh -c "DISPLAY=:99 xdotool mousemove 3 4"',),
+            {"shell": True},
+        ),
+        (
+            ('docker exec cua-sample-app sh -c "DISPLAY=:99 xdotool mouseup 1"',),
             {"shell": True},
         ),
     ]

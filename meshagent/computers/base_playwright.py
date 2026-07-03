@@ -173,7 +173,11 @@ class BasePlaywrightComputer:
         # Set up network interception to flag URLs matching domains in BLOCKED_DOMAINS
         async def handle_route(route: Route, request: Request):
             url = request.url
-            if check_blocklisted_url(url):
+            try:
+                check_blocklisted_url(url)
+            except ValueError as error:
+                if str(error) != f"Blocked URL: {url}":
+                    raise
                 print(f"Flagging blocked domain: {url}")
                 await route.abort()
             else:

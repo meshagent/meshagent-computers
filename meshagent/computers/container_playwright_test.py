@@ -80,6 +80,123 @@ def test_container_playwright_nonpositive_connect_timeout_disables_deadline(
 
 
 @pytest.mark.asyncio
+async def test_container_playwright_constructor_and_run_kwargs_match_python() -> None:
+    room = _FakeRoom()
+    run_calls: list[dict[str, object]] = []
+
+    async def _list() -> list[object]:
+        return []
+
+    async def _run(**kwargs) -> str:
+        run_calls.append(kwargs)
+        return "container_1"
+
+    room.containers = SimpleNamespace(list=_list, run=_run)
+
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+
+    assert computer.headless is True
+    assert computer.image == "meshagent/playwright:default"
+    assert computer.container_name == "playwright"
+    assert computer.container_command == (
+        '/bin/sh -c "playwright run-server --port 3000 --host 0.0.0.0"'
+    )
+    assert computer.room is room
+    assert computer.container_fut is None
+    assert computer._forwarder is None
+    assert computer.connect_timeout_seconds is None
+    assert computer.connect_attempt_timeout_seconds == 10.0
+    assert computer.connect_backoff_initial_seconds == 0.25
+    assert computer.connect_backoff_max_seconds == 4.0
+    assert computer.env == {}
+    assert computer.dimensions == (1440, 900)
+    assert computer.starting_url == "https://google.com"
+
+    assert await computer._find_or_create_container() == "container_1"
+    assert run_calls == [
+        {
+            "env": {},
+            "name": "playwright",
+            "image": "meshagent/playwright:default",
+            "command": '/bin/sh -c "playwright run-server --port 3000 --host 0.0.0.0"',
+            "writable_root_fs": True,
+            "ports": {3000: 3000},
+        }
+    ]
+
+    custom_env = {"A": "B"}
+    custom = ContainerPlaywrightComputer(
+        room=room,
+        image="custom-image",
+        env=custom_env,
+        dimensions=(1600, 900),
+        starting_url=" https://start.test ",
+    )
+
+    assert custom.image == "custom-image"
+    assert custom.env is custom_env
+    assert custom.dimensions == (1600, 900)
+    assert custom.starting_url == " https://start.test "
+
+
+def test_container_playwright_url_and_error_helpers_match_python() -> None:
+    assert ContainerPlaywrightComputer._health_check_target(
+        base_url="ws://127.0.0.1:62000/"
+    ) == ("127.0.0.1", 62000, "/json")
+    assert (
+        ContainerPlaywrightComputer._health_check_url(
+            base_url="ws://127.0.0.1:62000/base"
+        )
+        == "http://127.0.0.1:62000/json"
+    )
+    assert (
+        ContainerPlaywrightComputer._ws_endpoint_url(
+            base_url="ws://127.0.0.1:62000/base",
+            ws_endpoint_path=None,
+        )
+        == "ws://127.0.0.1:62000/base"
+    )
+    assert (
+        ContainerPlaywrightComputer._ws_endpoint_url(
+            base_url="ws://127.0.0.1:62000",
+            ws_endpoint_path="secret?debug=1",
+        )
+        == "ws://127.0.0.1:62000/secret?debug=1"
+    )
+    assert ContainerPlaywrightComputer._websocket_check_target(
+        ws_url="ws://127.0.0.1:62000/secret?debug=1"
+    ) == ("127.0.0.1", 62000, "/secret?debug=1")
+    with pytest.raises(
+        ValueError,
+        match=r"invalid playwright base url: 'ws://127.0.0.1/'",
+    ):
+        ContainerPlaywrightComputer._health_check_target(base_url="ws://127.0.0.1/")
+    with pytest.raises(
+        ValueError,
+        match=r"invalid playwright websocket url: 'ws://127.0.0.1/'",
+    ):
+        ContainerPlaywrightComputer._websocket_check_target(ws_url="ws://127.0.0.1/")
+
+    assert ContainerPlaywrightComputer._is_version_mismatch_error(
+        RuntimeError("Playwright VERSION MISMATCH")
+    )
+    for error in [
+        TimeoutError("anything"),
+        ConnectionError("anything"),
+        PlaywrightError("socket hang up"),
+        OSError(container_playwright_module.errno.ECONNREFUSED, "refused"),
+        RuntimeError("connection reset by peer"),
+    ]:
+        assert ContainerPlaywrightComputer._is_retryable_connect_error(error)
+    assert not ContainerPlaywrightComputer._is_retryable_connect_error(
+        PlaywrightError("syntax error")
+    )
+    assert not ContainerPlaywrightComputer._is_retryable_connect_error(
+        RuntimeError("not retryable")
+    )
+
+
+@pytest.mark.asyncio
 async def test_container_playwright_health_check_requires_ws_endpoint_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
