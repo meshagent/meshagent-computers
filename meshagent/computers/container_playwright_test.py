@@ -172,6 +172,36 @@ async def test_container_playwright_initial_start_creates_without_listing() -> N
     ]
 
 
+@pytest.mark.asyncio
+async def test_container_playwright_initial_start_emits_before_caching_future_like_python() -> (
+    None
+):
+    room = _FakeRoom()
+    observed_container_futures: list[object] = []
+
+    async def _run(**kwargs) -> str:
+        del kwargs
+        return "container_1"
+
+    room.containers = SimpleNamespace(list=lambda: [], run=_run)
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+    context = ComputerContext(
+        room=room,
+        caller=SimpleNamespace(id="caller"),
+        event_handler=lambda event: observed_container_futures.append(
+            computer.container_fut
+        ),
+        startup_event_factory=lambda state, details: {
+            "state": state,
+            "details": details,
+        },
+    )
+
+    assert await computer._ensure_container(context=context) == "container_1"
+    assert observed_container_futures == [None]
+    assert computer.container_fut is not None
+
+
 def test_container_playwright_url_and_error_helpers_match_python() -> None:
     assert ContainerPlaywrightComputer._health_check_target(
         base_url="ws://127.0.0.1:62000/"

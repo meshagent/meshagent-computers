@@ -42,12 +42,19 @@ class _FakePage:
         self.goto_calls: list[str] = []
         self.handlers: list[tuple[str, object]] = []
         self.context = None
+        self.close_calls = 0
+        self.close_error: Exception | None = None
 
     def on(self, event: str, handler) -> None:
         self.handlers.append((event, handler))
 
     async def goto(self, url: str) -> None:
         self.goto_calls.append(url)
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class _FakeBrowserContext:
@@ -72,9 +79,13 @@ class _FakeBrowserContext:
 class _FakeBrowser:
     def __init__(self, context: _FakeBrowserContext) -> None:
         self.contexts = [context]
+        self.close_calls = 0
 
     def is_connected(self) -> bool:
         return True
+
+    async def close(self) -> None:
+        self.close_calls += 1
 
 
 class _FakeChromium:
@@ -103,6 +114,14 @@ class _FakeCdpSession:
         if self.error is not None:
             raise self.error
         return self.result
+
+
+class _FakePlaywright:
+    def __init__(self) -> None:
+        self.stop_calls = 0
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
 
 
 @pytest.mark.asyncio
@@ -176,6 +195,52 @@ async def test_browserbase_skips_virtual_mouse_init_script_when_disabled(
     await computer._get_browser_and_page(_make_context())
 
     assert browser_context.init_scripts == []
+
+
+@pytest.mark.asyncio
+async def test_browserbase_aexit_prints_replay_only_after_cleanup_success(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(browserbase_module, "AsyncBrowserbase", _FakeBrowserbase)
+
+    page = _FakePage()
+    browser_context = _FakeBrowserContext(page)
+    browser = _FakeBrowser(browser_context)
+    playwright = _FakePlaywright()
+    computer = BrowserbaseBrowser()
+    computer._page = page
+    computer._browser = browser
+    computer._playwright = playwright
+    computer.session = SimpleNamespace(id="session-cleanup")
+
+    await computer.__aexit__(None, None, None)
+
+    assert page.close_calls == 1
+    assert browser.close_calls == 1
+    assert playwright.stop_calls == 1
+    assert (
+        "Session completed. View replay at "
+        "https://browserbase.com/sessions/session-cleanup"
+    ) in capsys.readouterr().out
+
+    failing_page = _FakePage()
+    failing_page.close_error = RuntimeError("close failed")
+    failing_browser_context = _FakeBrowserContext(failing_page)
+    failing_browser = _FakeBrowser(failing_browser_context)
+    failing_playwright = _FakePlaywright()
+    failing_computer = BrowserbaseBrowser()
+    failing_computer._page = failing_page
+    failing_computer._browser = failing_browser
+    failing_computer._playwright = failing_playwright
+    failing_computer.session = SimpleNamespace(id="session-close-error")
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        await failing_computer.__aexit__(None, None, None)
+
+    assert failing_page.close_calls == 1
+    assert failing_browser.close_calls == 0
+    assert failing_playwright.stop_calls == 0
+    assert "Session completed. View replay at" not in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
