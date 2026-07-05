@@ -105,7 +105,7 @@ async def test_container_playwright_constructor_and_run_kwargs_match_python() ->
     assert computer.container_fut is None
     assert computer._forwarder is None
     assert computer.connect_timeout_seconds is None
-    assert computer.connect_attempt_timeout_seconds == 10.0
+    assert computer.connect_attempt_timeout_seconds == 30.0
     assert computer.connect_backoff_initial_seconds == 0.25
     assert computer.connect_backoff_max_seconds == 4.0
     assert computer.env == {}
@@ -137,6 +137,39 @@ async def test_container_playwright_constructor_and_run_kwargs_match_python() ->
     assert custom.env is custom_env
     assert custom.dimensions == (1600, 900)
     assert custom.starting_url == " https://start.test "
+
+
+@pytest.mark.asyncio
+async def test_container_playwright_initial_start_creates_without_listing() -> None:
+    room = _FakeRoom()
+    list_calls = 0
+    run_calls: list[dict[str, object]] = []
+
+    async def _list() -> list[object]:
+        nonlocal list_calls
+        list_calls += 1
+        return []
+
+    async def _run(**kwargs) -> str:
+        run_calls.append(kwargs)
+        return "container_1"
+
+    room.containers = SimpleNamespace(list=_list, run=_run)
+
+    computer = ContainerPlaywrightComputer(room=room, headless=True)
+
+    assert await computer.ensure_container() == "container_1"
+    assert list_calls == 0
+    assert run_calls == [
+        {
+            "env": {},
+            "name": "playwright",
+            "image": "meshagent/playwright:default",
+            "command": '/bin/sh -c "playwright run-server --port 3000 --host 0.0.0.0"',
+            "writable_root_fs": True,
+            "ports": {3000: 3000},
+        }
+    ]
 
 
 def test_container_playwright_url_and_error_helpers_match_python() -> None:
@@ -539,7 +572,7 @@ async def test_container_playwright_uses_ws_endpoint_returned_by_health_check() 
     assert len(chromium.connect_calls) == 1
     assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:62000/secret-path"
     assert chromium.connect_calls[0]["headers"] == {}
-    assert chromium.connect_calls[0]["timeout"] == 0
+    assert chromium.connect_calls[0]["timeout"] == 30_000.0
 
 
 @pytest.mark.asyncio
@@ -843,9 +876,6 @@ async def test_container_playwright_retries_when_websocket_connect_hangs(
         def __init__(self) -> None:
             self.connect_calls: list[dict[str, object]] = []
             self._attempt = 0
-            self.first_connect_cancelled = asyncio.Event()
-            self.release_first_connect = asyncio.Event()
-            self.first_connect_task: asyncio.Task[object] | None = None
 
         async def connect(
             self,
@@ -863,13 +893,8 @@ async def test_container_playwright_retries_when_websocket_connect_hangs(
             )
             self._attempt += 1
             if self._attempt == 1:
-                self.first_connect_task = asyncio.current_task()
-                try:
-                    await asyncio.Future()
-                except asyncio.CancelledError:
-                    self.first_connect_cancelled.set()
-                    await self.release_first_connect.wait()
-                    raise PlaywrightError("Connection timed out")
+                assert timeout == 10.0
+                raise PlaywrightError("Connection timed out")
             return browser
 
     chromium = _HangingThenReadyChromium()
@@ -881,12 +906,10 @@ async def test_container_playwright_retries_when_websocket_connect_hangs(
 
     assert connected_browser is browser
     assert connected_page is page
-    assert chromium.connect_calls[0]["timeout"] == 0
-    assert chromium.first_connect_cancelled.is_set()
     assert len(chromium.connect_calls) == 2
     assert chromium.connect_calls[0]["base_url"] == "ws://127.0.0.1:63750/"
     assert chromium.connect_calls[1]["base_url"] == "ws://127.0.0.1:63751/"
-    assert chromium.connect_calls[1]["timeout"] == 0
+    assert chromium.connect_calls[1]["timeout"] == 10.0
     assert restart_calls == [True]
     assert sleep_calls == [0.1]
     assert len(forwarders) == 2
@@ -894,12 +917,6 @@ async def test_container_playwright_retries_when_websocket_connect_hangs(
     assert forwarders[1].close_calls == 0
     assert page.viewport_calls == [{"width": 1440, "height": 900}]
     assert page.goto_calls == ["https://google.com"]
-    chromium.release_first_connect.set()
-    assert chromium.first_connect_task is not None
-    await asyncio.wait_for(
-        asyncio.gather(chromium.first_connect_task, return_exceptions=True),
-        timeout=1.0,
-    )
 
 
 @pytest.mark.asyncio
@@ -1576,7 +1593,7 @@ async def test_container_playwright_recreates_container_between_retry_attempts(
     assert connected_browser is browser
     assert connected_page is page
     assert delete_calls == ["container_1"]
-    assert len(run_calls) == 1
+    assert len(run_calls) == 2
     assert restart_calls == [True]
     assert sleep_calls == [0.1]
     assert len(forwarders) == 2

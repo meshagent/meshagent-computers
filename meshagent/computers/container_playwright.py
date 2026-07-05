@@ -23,7 +23,7 @@ logger = logging.getLogger("computer_use")
 PLAYWRIGHT_CONTAINER_NAME = "playwright"
 PLAYWRIGHT_REMOTE_PORT = 3000
 PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS: float | None = None
-PLAYWRIGHT_CONNECT_ATTEMPT_TIMEOUT_SECONDS = 10.0
+PLAYWRIGHT_CONNECT_ATTEMPT_TIMEOUT_SECONDS = 30.0
 PLAYWRIGHT_CONNECT_BACKOFF_INITIAL_SECONDS = 0.25
 PLAYWRIGHT_CONNECT_BACKOFF_MAX_SECONDS = 4.0
 PLAYWRIGHT_FORWARDER_CLOSE_TIMEOUT_SECONDS = 5.0
@@ -141,6 +141,17 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
             if container.name == self.container_name
         ]
 
+    async def _run_container(self) -> str:
+        logger.info("playwright container not found, spinning up")
+        return await self.room.containers.run(
+            env=self.env,
+            name=self.container_name,
+            image=self.image,
+            command=self.container_command,
+            writable_root_fs=True,
+            ports={3000: 3000},
+        )
+
     async def _cached_container_id(self) -> str | None:
         if self.container_fut is None:
             return None
@@ -171,15 +182,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
             logger.info("playwright container found, using existing container")
             return container.id
 
-        logger.info("playwright container not found, spinning up")
-        return await self.room.containers.run(
-            env=self.env,
-            name=self.container_name,
-            image=self.image,
-            command=self.container_command,
-            writable_root_fs=True,
-            ports={3000: 3000},
-        )
+        return await self._run_container()
 
     def _emit_startup_progress(
         self,
@@ -200,7 +203,7 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                 context=context,
                 details="Starting Playwright container.",
             )
-            self.container_fut = asyncio.ensure_future(self._find_or_create_container())
+            self.container_fut = asyncio.ensure_future(self._run_container())
             return await self.container_fut
 
         if await self._cached_container_is_running():
@@ -456,14 +459,10 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
         height: int,
         timeout_seconds: float,
     ) -> tuple[Browser, Page]:
-        browser = await _wait_with_timeout_without_waiting_for_cancellation(
-            self._playwright.chromium.connect(
-                base_url,
-                headers=headers,
-                timeout=0,
-            ),
-            timeout_seconds=timeout_seconds,
-            timeout_error_message="playwright browser session is still initializing",
+        browser = await self._playwright.chromium.connect(
+            base_url,
+            headers=headers,
+            timeout=timeout_seconds * 1000,
         )
         try:
             page = await _wait_with_timeout_without_waiting_for_cancellation(
@@ -637,7 +636,10 @@ class ContainerPlaywrightComputer(BasePlaywrightComputer):
                     else:
                         self._emit_startup_progress(
                             context=context,
-                            details="Waiting for Playwright browser session to finish initializing.",
+                            details=(
+                                "Waiting for Playwright browser session to finish "
+                                f"initializing: {reason}"
+                            ),
                         )
                     if reason == "playwright container is still starting":
                         logger.info(
