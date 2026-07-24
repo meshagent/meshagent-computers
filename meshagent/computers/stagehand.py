@@ -15,8 +15,7 @@ import httpx
 from playwright.async_api import Browser, Page
 import playwright
 
-from meshagent.api.room_server_client import RoomClient
-from meshagent.api.websocket_protocol import WebSocketClientProtocol
+from meshagent.api import meshagent_base_url
 
 from .base_playwright import BasePlaywrightComputer
 from .computer import ComputerContext
@@ -253,18 +252,8 @@ def _pick_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _room_openai_base_url(*, room: RoomClient) -> str:
-    if isinstance(room.protocol, WebSocketClientProtocol):
-        base_url = room.protocol.url
-    else:
-        base_url = room.room_url
-
-    if base_url.startswith("ws://"):
-        base_url = "http://" + base_url[len("ws://") :]
-    elif base_url.startswith("wss://"):
-        base_url = "https://" + base_url[len("wss://") :]
-
-    return base_url.rstrip("/") + "/openai/v1"
+def _openai_base_url() -> str:
+    return f"{meshagent_base_url().rstrip('/')}/openai/v1"
 
 
 @contextmanager
@@ -481,7 +470,7 @@ class StagehandComputer(BasePlaywrightComputer):
             async with _STAGEHAND_ENV_LOCK:
                 with _temporary_environment(
                     {
-                        "OPENAI_BASE_URL": _room_openai_base_url(room=context.room),
+                        "OPENAI_BASE_URL": _openai_base_url(),
                         "MESHAGENT_SESSION_ID": context.room.session_id,
                     }
                 ):

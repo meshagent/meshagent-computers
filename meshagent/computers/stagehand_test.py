@@ -160,6 +160,7 @@ async def test_stagehand_computer_uses_room_runtime_for_local_stagehand(
         "stagehand_available",
         lambda **_: True,
     )
+    monkeypatch.setenv("MESHAGENT_API_URL", "http://localhost:8080")
 
     computer = StagehandComputer(
         dimensions=(1600, 900),
@@ -213,7 +214,7 @@ async def test_stagehand_computer_uses_room_runtime_for_local_stagehand(
     }
     assert stagehand.sessions.start_env_calls == [
         {
-            "OPENAI_BASE_URL": "http://localhost:8080/rooms/test-room/openai/v1",
+            "OPENAI_BASE_URL": "http://localhost:8080/openai/v1",
             "MESHAGENT_SESSION_ID": "session_1",
         }
     ]
@@ -522,16 +523,10 @@ def test_stagehand_platform_path_and_url_helpers_match_python(
     )
     assert local_headless_names == ["chromium-headless-shell", "chromium"]
 
-    room = _FakeRoom()
-    room.room_url = "ws://localhost:8080/rooms/test/"
+    monkeypatch.setenv("MESHAGENT_API_URL", "https://example.test")
     assert (
-        stagehand_module._room_openai_base_url(room=room)  # noqa: SLF001
-        == "http://localhost:8080/rooms/test/openai/v1"
-    )
-    room.room_url = "wss://example.test/rooms/test"
-    assert (
-        stagehand_module._room_openai_base_url(room=room)  # noqa: SLF001
-        == "https://example.test/rooms/test/openai/v1"
+        stagehand_module._openai_base_url()  # noqa: SLF001
+        == "https://example.test/openai/v1"
     )
 
 
